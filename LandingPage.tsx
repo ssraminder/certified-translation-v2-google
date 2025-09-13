@@ -1,13 +1,40 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Spinner from './components/Spinner';
 import Logo from './components/Logo';
-import { createClient } from '@supabase/supabase-js';
 import { runOcr, OcrResult } from './integrations/googleVision';
 import { analyzeWithGemini, GeminiAnalysis } from './integrations/gemini';
+import supabaseBrowser from './lib/supabase-browser';
 
-const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL as string;
-const supabaseAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY as string;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+async function loadDropdownData() {
+  const sb = supabaseBrowser;
+  if (!sb) {
+    return {
+      intendedUse: [] as string[],
+      languages: [] as string[],
+      error: 'Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.',
+    };
+  }
+  try {
+    const { data: uses, error: usesError } = await sb
+      .from('CertificationMap')
+      .select('intendedUse');
+    const { data: langs, error: langsError } = await sb
+      .from('Languages')
+      .select('name');
+    const intendedUse = Array.from(
+      new Set((uses ?? []).map((u: any) => u.intendedUse).filter(Boolean))
+    );
+    const languages = (langs ?? []).map((l: any) => l.name);
+    const error = usesError?.message || langsError?.message;
+    return { intendedUse, languages, error };
+  } catch (err) {
+    return {
+      intendedUse: [] as string[],
+      languages: [] as string[],
+      error: err instanceof Error ? err.message : 'Unknown error',
+    };
+  }
+}
 
 type Screen = 'form' | 'waiting' | 'result' | 'error';
 
@@ -36,6 +63,7 @@ const LandingPage: React.FC = () => {
 
   const [intendedUseOptions, setIntendedUseOptions] = useState<string[]>([]);
   const [languageOptions, setLanguageOptions] = useState<string[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [errors, setErrors] = useState<Record<string,string>>({});
   const [screen, setScreen] = useState<Screen>('form');
@@ -43,17 +71,28 @@ const LandingPage: React.FC = () => {
   const [results, setResults] = useState<CombinedFile[]>([]);
   const [errorStep, setErrorStep] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    async function fetchOptions() {
-      const { data: uses } = await supabase.from('CertificationMap').select('intendedUse');
-      const uniqueUses = Array.from(new Set((uses ?? []).map((u: any) => u.intendedUse).filter(Boolean)));
-      setIntendedUseOptions(uniqueUses);
-      const { data: langs } = await supabase.from('Languages').select('name');
-      setLanguageOptions((langs ?? []).map((l: any) => l.name));
-    }
-    fetchOptions();
+    let isMounted = true;
+    loadDropdownData().then(({ intendedUse, languages, error }) => {
+      if (!isMounted) return;
+      setIntendedUseOptions(intendedUse);
+      setLanguageOptions(languages);
+      if (error) setLoadError(error);
+    });
+    return () => {
+      isMounted = false;
+    };
   }, []);
+
+  useEffect(() => {
+    const target = menuRef.current;
+    if (!(target instanceof Node)) return;
+    const mo = new MutationObserver(() => {});
+    mo.observe(target, { childList: true, attributes: true });
+    return () => mo.disconnect();
+  }, [menuOpen]);
 
   const validate = (): boolean => {
     const newErrors: Record<string,string> = {};
@@ -144,7 +183,7 @@ const LandingPage: React.FC = () => {
           <a href="#" className="px-4 py-2 font-medium hover:underline">Login</a>
         </nav>
         {menuOpen && (
-          <div className="sm:hidden absolute right-4 top-14 bg-white dark:bg-[#0C1E40] shadow rounded">
+          <div ref={menuRef} className="sm:hidden absolute right-4 top-14 bg-white dark:bg-[#0C1E40] shadow rounded">
             <a href="#" className="block px-4 py-2" onClick={()=>setMenuOpen(false)}>Login</a>
           </div>
         )}
@@ -152,7 +191,7 @@ const LandingPage: React.FC = () => {
 
       {/* Content */}
       <main className="flex-1 p-4">
-        {screen === 'form' && (
+        {screen === 'form' && !loadError && (
           <form onSubmit={handleSubmit} className="max-w-2xl mx-auto space-y-4">
             {Object.keys(errors).length > 0 && (
               <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
@@ -200,6 +239,11 @@ const LandingPage: React.FC = () => {
             </div>
             <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded">Submit</button>
           </form>
+        )}
+        {screen === 'form' && loadError && (
+          <div className="max-w-md mx-auto p-4 bg-yellow-100 text-yellow-800 rounded" role="alert">
+            {loadError}
+          </div>
         )}
 
         {screen === 'waiting' && (
