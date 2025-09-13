@@ -5,6 +5,35 @@ import { runOcr, OcrResult } from './integrations/googleVision';
 import { analyzeWithGemini, GeminiAnalysis } from './integrations/gemini';
 import supabaseBrowser from './lib/supabase-browser';
 
+async function fetchWithReport(input: RequestInfo | URL, init?: RequestInit) {
+  const url = typeof input === 'string' ? input : (input as URL).toString();
+  const started = Date.now();
+  try {
+    const res = await fetch(input, init);
+    console.table([
+      {
+        url,
+        method: init?.method ?? 'GET',
+        status: res.status,
+        ok: res.ok,
+        time_ms: Date.now() - started,
+      },
+    ]);
+    if (!res.ok) {
+      const text = await res.text().catch(() => '<body read failed>');
+      console.warn('Response body preview:', text.slice(0, 200));
+    }
+    return res;
+  } catch (err: any) {
+    console.error('Failed to fetch', {
+      url,
+      message: err?.message,
+      time_ms: Date.now() - started,
+    });
+    throw err;
+  }
+}
+
 async function loadDropdownData() {
   const sb = supabaseBrowser;
   if (!sb) {
@@ -103,6 +132,44 @@ const LandingPage: React.FC = () => {
   const [errorStep, setErrorStep] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const originalFetch = window.fetch;
+    (window as any).fetch = (input: RequestInfo | URL, init?: RequestInit) =>
+      fetchWithReport(input, init);
+    return () => {
+      (window as any).fetch = originalFetch;
+    };
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const url = (import.meta as any).env?.VITE_SUPABASE_URL;
+        const key = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY;
+        console.log(
+          'VITE_SUPABASE_URL?',
+          Boolean(url),
+          'VITE_SUPABASE_ANON_KEY?',
+          Boolean(key)
+        );
+
+        if (!supabaseBrowser) {
+          console.log('Supabase ping:', { ok: false, error: 'no client', sample: undefined });
+          return;
+        }
+
+        const { data, error } = await supabaseBrowser
+          .from('languages')
+          .select('languagename')
+          .limit(1);
+
+        console.log('Supabase ping:', { ok: !error, error: error?.message, sample: data?.[0] });
+      } catch (e: any) {
+        console.error('Supabase ping failed:', e?.message);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
