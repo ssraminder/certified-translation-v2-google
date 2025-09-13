@@ -27,17 +27,18 @@ export const handler: Handler = async (event) => {
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     
-    // Perform a minimal, read-only test.
-    // NOTE: This will fail if you don't have a table named 'your_table_name'. 
-    // This is just for a connection test; a better test would be to query a real, public table.
+    // Perform a minimal, read-only test against a placeholder table.
+    // It's expected that the table 'your_table_name' does not exist.
     const { data, error } = await supabase
       .from('your_table_name')
       .select('id')
       .limit(1);
 
-    // It's common for this query to fail if the table doesn't exist.
-    // We can consider the connection a success if the error is about the table, not authentication.
-    if (error && !error.message.includes('relation "your_table_name" does not exist')) {
+    const missingTable =
+      error?.message.includes('relation "your_table_name" does not exist') ||
+      error?.message.includes("Could not find the table 'public.your_table_name'");
+
+    if (error && !missingTable) {
       throw error;
     }
 
@@ -47,7 +48,9 @@ export const handler: Handler = async (event) => {
         success: true,
         data: {
           message: 'Successfully connected to Supabase.',
-          result: error ? `Query failed as expected (table not found), but connection was successful.` : data,
+          result: missingTable
+            ? 'Query failed as expected (table not found), but connection was successful.'
+            : data,
         },
       }),
     };
