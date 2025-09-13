@@ -39,10 +39,10 @@ async function* generateGeminiStream(prompt: string, apiKey: string) {
 }
 
 export const handler: Handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
+  if (event.httpMethod !== 'POST' && event.httpMethod !== 'GET') {
     return {
       statusCode: 405,
-      body: JSON.stringify({ success: false, error: 'Method Not Allowed' }),
+      body: JSON.stringify({ success: false, error: `Method ${event.httpMethod} not allowed. Use GET or POST.` }),
     };
   }
 
@@ -59,13 +59,21 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    if (!event.body) {
-      return { statusCode: 400, body: JSON.stringify({ success: false, error: 'Request body is missing.' }) };
+    let prompt: string | undefined;
+
+    if (event.httpMethod === 'GET') {
+      prompt = event.queryStringParameters?.prompt;
+    } else {
+      if (!event.body) {
+        return { statusCode: 400, body: JSON.stringify({ success: false, error: 'Request body is missing.' }) };
+      }
+
+      const parsedBody = JSON.parse(event.body);
+      prompt = parsedBody.prompt;
     }
 
-    const { prompt } = JSON.parse(event.body);
     if (!prompt) {
-        return { statusCode: 400, body: JSON.stringify({ success: false, error: 'Prompt is required.' }) };
+      return { statusCode: 400, body: JSON.stringify({ success: false, error: 'Prompt is required.' }) };
     }
 
     const geminiStreamIterator = generateGeminiStream(prompt, GEMINI_API_KEY);

@@ -5,10 +5,10 @@ import { Handler } from '@netlify/functions';
 import * as SibApiV3Sdk from '@getbrevo/brevo';
 
 export const handler: Handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return { 
-      statusCode: 405, 
-      body: JSON.stringify({ success: false, error: 'Method Not Allowed' }) 
+  if (event.httpMethod !== 'POST' && event.httpMethod !== 'GET') {
+    return {
+      statusCode: 405,
+      body: JSON.stringify({ success: false, error: `Method ${event.httpMethod} not allowed. Use GET or POST.` })
     };
   }
 
@@ -25,10 +25,10 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    let apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
-    apiInstance.setApiKey(SibApiV3Sdk.TransactionalEmailsApiApiKeys.apiKey, BREVO_API_KEY);
+    const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
+    apiInstance.apiClient.authentications['api-key'].apiKey = BREVO_API_KEY;
 
-    let sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail(); 
+    const sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail();
 
     sendSmtpEmail.subject = "Brevo API Test Email";
     sendSmtpEmail.htmlContent = "<html><body><h1>This is a test email</h1><p>Your Brevo API integration is working correctly.</p></body></html>";

@@ -2,44 +2,50 @@
 // File path: /netlify/functions/test-google-cloud-vision.ts
 
 import { Handler } from '@netlify/functions';
-import vision from '@google-cloud/vision';
 
 export const handler: Handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return { 
-      statusCode: 405, 
-      body: JSON.stringify({ success: false, error: 'Method Not Allowed' }) 
+  if (event.httpMethod !== 'POST' && event.httpMethod !== 'GET') {
+    return {
+      statusCode: 405,
+      body: JSON.stringify({ success: false, error: `Method ${event.httpMethod} not allowed. Use GET or POST.` })
     };
   }
 
-  // NOTE: For Google Cloud services, it's best to use a service account JSON file.
-  // Set the GOOGLE_APPLICATION_CREDENTIALS environment variable to the path of this file.
-  // Netlify supports multi-line env vars, so you can paste the JSON content.
-  if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-     return {
+  const { GEMINI_API_KEY } = process.env;
+
+  if (!GEMINI_API_KEY) {
+    return {
       statusCode: 500,
       body: JSON.stringify({
         success: false,
-        error: 'GOOGLE_APPLICATION_CREDENTIALS are not configured in environment variables.',
+        error: 'GEMINI_API_KEY is not configured in environment variables.',
       }),
     };
   }
 
   try {
-    const client = new vision.ImageAnnotatorClient();
-
     // A base64 encoded image of the text "TEST"
-    const testImageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAABoSURBVHhe7c4xEQAgDAAxhHSAn2y4D8i/yYMHQ0RE5A4gQAACBCBAgAABAgQIkCAgAQIECBAgQIAAAQIECEiAAAECBAgQIECAAAECBIiI7F4fABM+AY7Q5w4PAAAAAElFTSuQmCC';
+    const testImageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsM' +
+      'AAA7DAcdvqGQAAABoSURBVHhe7c4xEQAgDAAxhHSAn2y4D8i/yYMHQ0RE5A4gQAACBCBAgAABAgQIkCAgAQIECBAgQIAAAQIECEiAAAECBAgQIECAAAECBIiI7F4fABM' +
+      '+AY7Q5w4PAAAAAElFTSuQmCC';
 
-    const request = {
-      image: {
-        content: testImageBase64,
-      },
-      features: [{ type: 'TEXT_DETECTION' }],
+    const requestBody = {
+      requests: [
+        {
+          image: { content: testImageBase64 },
+          features: [{ type: 'TEXT_DETECTION' }],
+        },
+      ],
     };
 
-    const [result] = await client.textDetection(request);
-    const detections = result.textAnnotations;
+    const response = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${GEMINI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+
+    const data = await response.json();
+    const detectedText = data?.responses?.[0]?.textAnnotations?.[0]?.description || 'No text detected.';
 
     return {
       statusCode: 200,
@@ -47,7 +53,7 @@ export const handler: Handler = async (event) => {
         success: true,
         data: {
           message: 'Successfully connected to Google Cloud Vision API.',
-          detectedText: detections && detections.length > 0 ? detections[0].description : 'No text detected.',
+          detectedText,
         },
       }),
     };
@@ -61,3 +67,4 @@ export const handler: Handler = async (event) => {
     };
   }
 };
+
