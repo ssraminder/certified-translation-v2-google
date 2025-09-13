@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "start": "vite preview --port 8080 --host 0.0.0.0"
+    "start": "vite preview"
   },
   "dependencies": {
     "@google/genai": "^0.15.0",
