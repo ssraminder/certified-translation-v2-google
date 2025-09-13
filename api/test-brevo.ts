@@ -2,9 +2,16 @@
 // File path: /api/test-brevo.ts
 
 import * as SibApiV3Sdk from '@getbrevo/brevo';
-import type { Request, Response } from 'express';
+// import type { Request, Response } from 'express';
+// Fix: Use Node.js http types and define a custom interface for Express-like compatibility.
+import type { IncomingMessage, ServerResponse } from 'http';
 
-export default async function handler(req: Request, res: Response) {
+interface ApiResponse extends ServerResponse {
+  status(code: number): this;
+  json(data: any): this;
+}
+
+export default async function handler(req: IncomingMessage, res: ApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Method Not Allowed' });
   }

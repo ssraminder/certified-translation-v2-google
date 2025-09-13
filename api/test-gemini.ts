@@ -2,16 +2,23 @@
 // File path: /api/test-gemini.ts
 
 import { GoogleGenAI } from '@google/genai';
-import type { Request, Response } from 'express';
+// import type { Request, Response } from 'express';
+// Fix: Use Node.js http types and define a custom interface for Express-like compatibility.
+import type { IncomingMessage, ServerResponse } from 'http';
 
-export default async function handler(req: Request, res: Response) {
+interface ApiResponse extends ServerResponse {
+  status(code: number): this;
+  json(data: any): this;
+}
+
+export default async function handler(req: IncomingMessage, res: ApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Method Not Allowed' });
   }
 
-  const { API_KEY } = process.env;
+  const { GEMINI_API_KEY } = process.env;
 
-  if (!API_KEY) {
+  if (!GEMINI_API_KEY) {
     return res.status(500).json({
       success: false,
       error: 'GEMINI_API_KEY is not configured in environment variables.',
@@ -19,7 +26,7 @@ export default async function handler(req: Request, res: Response) {
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey: API_KEY });
+    const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
     
     // Perform a minimal API call to test the key
     const response = await ai.models.generateContent({

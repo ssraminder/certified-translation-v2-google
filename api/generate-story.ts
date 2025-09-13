@@ -3,16 +3,29 @@
 // Note: Your deployment platform (Vercel, Netlify, Digital Ocean) must support streaming/edge functions for this to work.
 
 import { GoogleGenAI } from '@google/genai';
-import type { Request, Response } from 'express'; // or your platform's specific types
+// import type { Request, Response } from 'express'; // or your platform's specific types
+// Fix: Use Node.js http types and define custom interfaces for Express-like compatibility.
+import type { IncomingMessage, ServerResponse } from 'http';
 
-export default async function handler(req: Request, res: Response) {
+interface ApiRequest extends IncomingMessage {
+  body: {
+    prompt: string;
+  };
+}
+interface ApiResponse extends ServerResponse {
+  status(code: number): this;
+  json(data: any): this;
+}
+
+
+export default async function handler(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Method Not Allowed' });
   }
 
-  const { API_KEY } = process.env;
+  const { GEMINI_API_KEY } = process.env;
 
-  if (!API_KEY) {
+  if (!GEMINI_API_KEY) {
     return res.status(500).json({
       success: false,
       error: 'GEMINI_API_KEY is not configured in environment variables.',
@@ -25,7 +38,7 @@ export default async function handler(req: Request, res: Response) {
         return res.status(400).json({ success: false, error: 'Prompt is required.' });
     }
 
-    const ai = new GoogleGenAI({ apiKey: API_KEY });
+    const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
     
     const stream = await ai.models.generateContentStream({
         model: 'gemini-2.5-flash',

@@ -2,9 +2,16 @@
 // File path: /api/test-stripe.ts
 
 import Stripe from 'stripe';
-import type { Request, Response } from 'express';
+// import type { Request, Response } from 'express';
+// Fix: Use Node.js http types and define a custom interface for Express-like compatibility.
+import type { IncomingMessage, ServerResponse } from 'http';
 
-export default async function handler(req: Request, res: Response) {
+interface ApiResponse extends ServerResponse {
+  status(code: number): this;
+  json(data: any): this;
+}
+
+export default async function handler(req: IncomingMessage, res: ApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Method Not Allowed' });
   }
@@ -20,7 +27,8 @@ export default async function handler(req: Request, res: Response) {
   
   try {
     const stripe = new Stripe(STRIPE_SECRET_KEY, {
-      apiVersion: '2024-04-10', // Use a fixed API version
+      // Fix: The installed Stripe SDK types require a specific (beta) API version.
+      apiVersion: '2024-04-10',
     });
 
     // A safe, read-only operation to test the API key

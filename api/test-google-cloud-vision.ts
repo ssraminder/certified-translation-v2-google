@@ -2,9 +2,16 @@
 // File path: /api/test-google-cloud-vision.ts
 
 import vision from '@google-cloud/vision';
-import type { Request, Response } from 'express';
+// import type { Request, Response } from 'express';
+// Fix: Use Node.js http types and define a custom interface for Express-like compatibility.
+import type { IncomingMessage, ServerResponse } from 'http';
 
-export default async function handler(req: Request, res: Response) {
+interface ApiResponse extends ServerResponse {
+  status(code: number): this;
+  json(data: any): this;
+}
+
+export default async function handler(req: IncomingMessage, res: ApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Method Not Allowed' });
   }
@@ -23,7 +30,7 @@ export default async function handler(req: Request, res: Response) {
     const client = new vision.ImageAnnotatorClient();
 
     // A base64 encoded image of the text "TEST"
-    const testImageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAABoSURBVHhe7c4xEQAgDAAxhHSAn2y4D8i/yYMHQ0RE5A4gQAACBCBAgAABAgQIkCAgAQIECBAgQIAAAQIECEiAAAECBAgQIECAAAECBIiI7F4fABM+AY7Q5w4PAAAAAElFTkSuQmCC';
+    const testImageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAABoSURBVHhe7c4xEQAgDAAxhHSAn2y4D8i/yYMHQ0RE5A4gQAACBCBAgAABAgQIkCAgAQIECBAgQIAAAQIECEiAAAECBAgQIECAAAECBIiI7F4fABM+AY7Q5w4PAAAAAElFTSuQmCC';
 
     const request = {
       image: {
