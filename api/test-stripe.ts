@@ -28,7 +28,8 @@ export default async function handler(req: IncomingMessage, res: ApiResponse) {
   try {
     const stripe = new Stripe(STRIPE_SECRET_KEY, {
       // Fix: The installed Stripe SDK types require a specific (beta) API version.
-      apiVersion: '2024-04-10',
+      // Fix: Update Stripe API version to match the required type.
+      apiVersion: '2025-08-27.basil',
     });
 
     // A safe, read-only operation to test the API key
