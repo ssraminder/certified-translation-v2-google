@@ -17,16 +17,29 @@ const testApi = async (apiName: ApiName): Promise<ApiResponse> => {
             },
         });
         
-        // Try to parse the JSON body, regardless of the response status.
-        // This ensures we can get error details from the body of a 4xx/5xx response.
-        const result = await response.json();
-
         if (!response.ok) {
-            // If the backend provided a specific error message, use it. Otherwise, create a generic one.
-            throw new Error(result.error || `Request failed with status ${response.status}`);
+            const errorText = await response.text();
+            let errorMessage = `Request failed with status ${response.status}`;
+            
+            // If the server returns an HTML page (e.g., for a 404), it indicates a missing backend endpoint.
+            if (errorText.trim().toLowerCase().startsWith('<!doctype html')) {
+                errorMessage = `API endpoint not found at '${endpoint}'. Please ensure backend functions are deployed correctly.`;
+            } else {
+                 // Otherwise, try to parse a JSON error from the backend, or use the raw text.
+                try {
+                    const errorJson = JSON.parse(errorText);
+                    errorMessage = errorJson.error || errorMessage;
+                } catch {
+                    errorMessage = errorText || errorMessage;
+                }
+            }
+            throw new Error(errorMessage);
         }
 
+        // The backend should return a JSON response on success.
+        const result = await response.json();
         return result;
+
     } catch (error) {
         // Catches network errors (e.g., failed to fetch) and errors thrown from the response check.
         return {
