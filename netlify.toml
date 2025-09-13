@@ -14,3 +14,7 @@
   to = "/.netlify/functions/:splat"
   status = 200
 
+[context.deploy-preview.environment]
+  VITE_SUPABASE_URL = "https://YOUR-PROJECT.supabase.co"
+  VITE_SUPABASE_ANON_KEY = "YOUR-ANON-KEY"
+
