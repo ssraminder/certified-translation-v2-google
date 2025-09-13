@@ -1,9 +1,16 @@
-
 # Digital Ocean App Platform: Environment Variable Setup
 
-To run this application and its backend functions in production on Digital Ocean, you must configure your API keys and other secrets as environment variables. **Never hardcode secrets in your code.**
+This guide explains how to configure your API keys and other secrets as environment variables for deployment on the Digital Ocean App Platform.
 
-Follow these steps to add your environment variables in the Digital Ocean App Platform dashboard:
+## Project Structure
+
+This is a full-stack application.
+- **Frontend:** The React application is in the root of the project and will be deployed as a "Web Service" component.
+- **Backend:** The backend consists of serverless functions located in the `/api` directory. Digital Ocean will automatically detect and deploy these as a "Functions" component.
+
+The backend functions require the environment variables listed below to communicate with third-party services.
+
+## Configuration Steps
 
 1.  **Navigate to your App:**
     *   Log in to your Digital Ocean account.
@@ -13,8 +20,8 @@ Follow these steps to add your environment variables in the Digital Ocean App Pl
     *   Click on the "Settings" tab for your app.
 
 3.  **Find the Component and Edit Environment Variables:**
-    *   Scroll down to the "Components" section. You will likely have a "web" service for the React frontend and separate "functions" for your backend APIs.
-    *   For each component that needs secrets (your functions), click its name to go to its settings.
+    *   Scroll down to the "Components" section. You will have a "web" service for the React frontend and a "functions" component for your backend APIs.
+    *   Click the **functions** component to go to its settings.
     *   Find the "Environment Variables" section and click "Edit".
 
 4.  **Add Environment Variables:**
