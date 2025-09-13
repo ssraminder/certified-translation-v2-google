@@ -1,0 +1,5 @@
+{
+  "name": "API Integration Test Dashboard",
+  "description": "A dashboard to test integrations with various APIs like Supabase, Gemini, Google Cloud Vision, Stripe, and Brevo, designed for deployment on Digital Ocean.",
+  "requestFramePermissions": []
+}
