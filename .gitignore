@@ -1,2 +1,14 @@
 node_modules/
 dist/
+
+# Block binaries for PRs
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.tiff
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx

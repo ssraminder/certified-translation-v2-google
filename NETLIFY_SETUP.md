@@ -31,13 +31,11 @@ The backend functions require the environment variables listed below to communic
     | ----------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------ |
     | `SUPABASE_URL`                      | The project URL from your Supabase dashboard (Settings > API).                                           | `https://xyz.supabase.co`      |
     | `SUPABASE_ANON_KEY`                 | The public anonymous key from your Supabase dashboard (Settings > API).                                  | `ey...`                        |
-    | `GEMINI_API_KEY`                    | Your API key from Google AI Studio.                                                                      | `AIza...`                      |
+    | `GEMINI_API_KEY`                    | Your API key from Google AI Studio (used for Gemini and Google Cloud Vision).                                                                      | `AIza...`                      |
     | `STRIPE_SECRET_KEY`                 | Your Stripe secret key (use a test key for development/staging).                                         | `sk_test_...`                  |
     | `BREVO_API_KEY`                     | Your API v3 key from the Brevo dashboard (SMTP & API section).                                           | `xkeysib...`                   |
     | `TEST_EMAIL_RECIPIENT`              | The email address where the Brevo test email will be sent.                                               | `your-email@example.com`       |
     | `TEST_EMAIL_SENDER`                 | An authenticated sender email address in your Brevo account.                                             | `noreply@yourdomain.com`       |
-    | `GOOGLE_APPLICATION_CREDENTIALS`    | **(For Google Cloud Vision)** The content of your service account JSON file. Paste the entire JSON here. | `{"type": "service_account",...}` |
-
 5.  **Redeploy:**
     *   After adding all the variables, you'll need to trigger a new deployment for the changes to take effect.
     *   Go to the "Deploys" tab for your site.
