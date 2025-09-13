@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "start": "vite preview"
+    "start": "vite preview",
+    "prebuild:debug": "node scripts/check-env-build.js"
   },
   "dependencies": {
     "@getbrevo/brevo": "^1.0.1",
