@@ -28,17 +28,16 @@ export default async function handler(req: IncomingMessage, res: ApiResponse) {
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     
-    // Perform a minimal, read-only test.
-    // NOTE: This will fail if you don't have a table named 'your_table_name'. 
-    // This is just for a connection test; a better test would be to query a real, public table.
+    // Perform a minimal, read-only test by querying a table that is expected not to exist.
+    // Any "table not found" error indicates that the connection and credentials are valid.
     const { data, error } = await supabase
       .from('your_table_name')
       .select('id')
       .limit(1);
 
-    // It's common for this query to fail if the table doesn't exist.
-    // We can consider the connection a success if the error is about the table, not authentication.
-    if (error && !error.message.includes('relation "your_table_name" does not exist')) {
+    const tableMissing =
+      error && /relation "your_table_name" does not exist|Could not find the table/i.test(error.message);
+    if (error && !tableMissing) {
       throw error;
     }
 
