@@ -11,7 +11,7 @@ export const handler: Handler = async (event) => {
     return methodNotAllowed;
   }
 
-  const { STRIPE_SECRET_KEY } = process.env;
+  const { STRIPE_SECRET_KEY, STRIPE_API_VERSION } = process.env;
 
   if (!STRIPE_SECRET_KEY) {
     return {
@@ -24,9 +24,11 @@ export const handler: Handler = async (event) => {
   }
   
   try {
+    const apiVersion =
+      (STRIPE_API_VERSION as Stripe.LatestApiVersion | undefined) || '2024-08-20';
+
     const stripe = new Stripe(STRIPE_SECRET_KEY, {
-      // Fix: Update Stripe API version to match the required type from the SDK.
-      apiVersion: '2025-08-27.basil', 
+      apiVersion,
     });
 
     // A safe, read-only operation to test the API key
