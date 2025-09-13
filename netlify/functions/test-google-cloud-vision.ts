@@ -2,13 +2,12 @@
 // File path: /netlify/functions/test-google-cloud-vision.ts
 
 import { Handler } from '@netlify/functions';
+import { ensureMethod } from './utils/ensureMethod';
 
 export const handler: Handler = async (event) => {
-  if (event.httpMethod !== 'POST' && event.httpMethod !== 'GET') {
-    return {
-      statusCode: 405,
-      body: JSON.stringify({ success: false, error: `Method ${event.httpMethod} not allowed. Use GET or POST.` })
-    };
+  const methodNotAllowed = ensureMethod(event, 'POST', 'GET');
+  if (methodNotAllowed) {
+    return methodNotAllowed;
   }
 
   const { GEMINI_API_KEY } = process.env;

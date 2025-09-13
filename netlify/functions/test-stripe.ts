@@ -3,13 +3,12 @@
 
 import { Handler } from '@netlify/functions';
 import Stripe from 'stripe';
+import { ensureMethod } from './utils/ensureMethod';
 
 export const handler: Handler = async (event) => {
-  if (event.httpMethod !== 'POST' && event.httpMethod !== 'GET') {
-    return {
-      statusCode: 405,
-      body: JSON.stringify({ success: false, error: `Method ${event.httpMethod} not allowed. Use GET or POST.` })
-    };
+  const methodNotAllowed = ensureMethod(event, 'POST', 'GET');
+  if (methodNotAllowed) {
+    return methodNotAllowed;
   }
 
   const { STRIPE_SECRET_KEY } = process.env;
