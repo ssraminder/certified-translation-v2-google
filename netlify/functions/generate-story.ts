@@ -2,6 +2,7 @@
 // File path: /netlify/functions/generate-story.ts
 import { Handler } from '@netlify/functions';
 import { GoogleGenAI } from '@google/genai';
+import { ensureMethod } from './utils/ensureMethod';
 
 /**
  * Converts an async iterator (like the one from Gemini's SDK) into a Web-standard ReadableStream.
@@ -39,11 +40,9 @@ async function* generateGeminiStream(prompt: string, apiKey: string) {
 }
 
 export const handler: Handler = async (event) => {
-  if (event.httpMethod !== 'POST' && event.httpMethod !== 'GET') {
-    return {
-      statusCode: 405,
-      body: JSON.stringify({ success: false, error: `Method ${event.httpMethod} not allowed. Use GET or POST.` }),
-    };
+  const methodNotAllowed = ensureMethod(event, 'POST', 'GET');
+  if (methodNotAllowed) {
+    return methodNotAllowed;
   }
 
   const { GEMINI_API_KEY } = process.env;
