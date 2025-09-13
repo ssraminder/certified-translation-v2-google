@@ -10,6 +10,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         diagnostics: resolve(__dirname, 'diagnostics.html'),
+        __env: resolve(__dirname, '__env.html'),
       },
     },
   },
