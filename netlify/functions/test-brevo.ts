@@ -5,10 +5,10 @@ import { Handler } from '@netlify/functions';
 import * as SibApiV3Sdk from '@getbrevo/brevo';
 
 export const handler: Handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return { 
-      statusCode: 405, 
-      body: JSON.stringify({ success: false, error: 'Method Not Allowed' }) 
+  if (event.httpMethod !== 'POST' && event.httpMethod !== 'GET') {
+    return {
+      statusCode: 405,
+      body: JSON.stringify({ success: false, error: `Method ${event.httpMethod} not allowed. Use GET or POST.` })
     };
   }
 
