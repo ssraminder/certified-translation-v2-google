@@ -1,13 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Spinner from './components/Spinner';
 import Logo from './components/Logo';
-import { createClient } from '@supabase/supabase-js';
 import { runOcr, OcrResult } from './integrations/googleVision';
 import { analyzeWithGemini, GeminiAnalysis } from './integrations/gemini';
+import supabase from './src/lib/supabaseClient';
 
-const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL as string;
-const supabaseAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY as string;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+import supabase from './src/lib/supabaseClient';
 
 type Screen = 'form' | 'waiting' | 'review' | 'result' | 'error';
 
@@ -23,7 +21,12 @@ interface CombinedFile {
   pages: CombinedPage[];
 }
 
-const allowedExtensions = ['jpg','jpeg','png','tiff','doc','docx','pdf','xls','xlsx'];
+const allowedExtensions = ['jpg','jpeg','png','tiff','doc','docx','pdf','xls','xlsx'] as const;
+const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25MB, matches server limit
+
+function uniqSorted(arr: (string | null | undefined)[] = []) {
+  return Array.from(new Set(arr.filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b));
+}
 
 const LandingPage: React.FC = () => {
   const [customerName, setCustomerName] = useState('');
@@ -32,10 +35,14 @@ const LandingPage: React.FC = () => {
   const [intendedUse, setIntendedUse] = useState('');
   const [sourceLanguage, setSourceLanguage] = useState('');
   const [targetLanguage, setTargetLanguage] = useState('');
-  const [files, setFiles] = useState<FileList | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [intendedUseOptions, setIntendedUseOptions] = useState<string[]>([]);
-  const [languageOptions, setLanguageOptions] = useState<string[]>([]);
+  const [languages, setLanguages] = useState<string[]>([]);
+  const [intendedUses, setIntendedUses] = useState<string[]>([]);
+  const [loadingDropdowns, setLoadingDropdowns] = useState(false);
+  const [dropdownError, setDropdownError] = useState<string | null>(null);
+
   // DO NOT EDIT OUTSIDE THIS BLOCK
   const [certTypes, setCertTypes] = useState<any[]>([]);
   const [tiers, setTiers] = useState<any[]>([]);
@@ -49,41 +56,81 @@ const LandingPage: React.FC = () => {
   const [results, setResults] = useState<CombinedFile[]>([]);
   const [errorStep, setErrorStep] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [quoteId, setQuoteId] = useState<string | null>(null);
 
   useEffect(() => {
-    async function fetchOptions() {
+useEffect(() => {
+  let mounted = true;
+  (async () => {
+    try {
+      setLoadingDropdowns(true);
+      setDropdownError(null);
+
       // DO NOT EDIT OUTSIDE THIS BLOCK
-      const { data: uses } = await supabase.from('CertificationMap').select('intendedUse, certType');
-      setCertificationMap(uses ?? []);
-      const uniqueUses = Array.from(new Set((uses ?? []).map((u: any) => u.intendedUse).filter(Boolean)));
-      setIntendedUseOptions(uniqueUses);
-      const { data: langs } = await supabase.from('Languages').select('name, tier');
-      setLanguagesData(langs ?? []);
-      setLanguageOptions((langs ?? []).map((l: any) => l.name));
-      const { data: t } = await supabase.from('Tiers').select('tier, multiplier');
-      setTiers(t ?? []);
-      const { data: ct } = await supabase.from('CertificationTypes').select('certType, price');
-      setCertTypes(ct ?? []);
+      const { data: langRows, error: langErr } = await supabase
+        .from('languages')
+        .select('languagename, tier')
+        .order('languagename', { ascending: true });
+      if (langErr) throw langErr;
+
+      const { data: tierRows, error: tierErr } = await supabase
+        .from('tiers')
+        .select('tier, multiplier')
+        .order('tier', { ascending: true });
+      if (tierErr) throw tierErr;
+
+      const { data: ctypeRows, error: ctypeErr } = await supabase
+        .from('certificationtypes')
+        .select('certtype, price')
+        .order('certtype', { ascending: true });
+      if (ctypeErr) throw ctypeErr;
+
+      const { data: cmapRows, error: cmapErr } = await supabase
+        .from('certificationmap')
+        .select('intendeduse, certtype')
+        .order('intendeduse', { ascending: true });
+      if (cmapErr) throw cmapErr;
+
+      if (!mounted) return;
+      setLanguagesData((langRows ?? []).map(r => ({ name: r.languagename, tier: r.tier })));
+      setLanguages(uniqSorted((langRows ?? []).map(r => r.languagename)));
+      setTiers(tierRows ?? []);
+      setCertTypes((ctypeRows ?? []).map(r => ({ certType: r.certtype, price: r.price })));
+      setCertificationMap((cmapRows ?? []).map(r => ({ intendedUse: r.intendeduse, certType: r.certtype })));
+      setIntendedUses(uniqSorted((cmapRows ?? []).map(r => r.intendeduse)));
       // DO NOT EDIT OUTSIDE THIS BLOCK
+    } catch (e: any) {
+      if (mounted) setDropdownError('Could not load form options. Please retry.');
+      console.error('Dropdown fetch failed:', e?.message || e);
+    } finally {
+      if (mounted) setLoadingDropdowns(false);
     }
-    fetchOptions();
-  }, []);
+  })();
+  return () => {
+    mounted = false;
+  };
+}, []);
+
 
   const validate = (): boolean => {
     const newErrors: Record<string,string> = {};
     if(!customerName.trim()) newErrors.customerName = 'Name is required';
-    if(!customerEmail.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) newErrors.customerEmail = 'Valid email required';
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) newErrors.customerEmail = 'Valid email required';
     if(!intendedUse) newErrors.intendedUse = 'Intended use required';
     if(!sourceLanguage) newErrors.sourceLanguage = 'Source language required';
     if(!targetLanguage) newErrors.targetLanguage = 'Target language required';
-    if(!files || files.length === 0) newErrors.files = 'At least one file required';
-    if(files){
-      Array.from(files).forEach(f => {
-        const ext = f.name.split('.').pop()?.toLowerCase();
-        if(!ext || !allowedExtensions.includes(ext)){
-          newErrors.files = 'Unsupported file type';
-        }
-      });
+    if(files.length === 0) newErrors.files = 'At least one file required';
+
+    for (const f of files) {
+      const ext = f.name.split('.').pop()?.toLowerCase();
+      if(!ext || !allowedExtensions.includes(ext as any)){
+        newErrors.files = 'Unsupported file type';
+        break;
+      }
+      if (f.size > MAX_FILE_SIZE_BYTES) {
+        newErrors.files = `File too large (max ${(MAX_FILE_SIZE_BYTES/1024/1024)|0}MB)`;
+        break;
+      }
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -92,16 +139,36 @@ const LandingPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if(!validate()) return;
-    if(!files) return;
+    if(files.length === 0) return;
     try{
       setScreen('waiting');
-      setStatusText('Uploading…');
-      // Mock upload delay
-      await new Promise(r => setTimeout(r, 300));
+      setStatusText('Saving quote…');
+      // DO NOT EDIT OUTSIDE THIS BLOCK
+      const formData = new FormData();
+      formData.append('name', customerName);
+      formData.append('email', customerEmail);
+      formData.append('phone', customerPhone);
+      formData.append('intendedUse', intendedUse);
+      formData.append('sourceLanguage', sourceLanguage);
+      formData.append('targetLanguage', targetLanguage);
+      files.forEach(f => formData.append('files[]', f));
+      const saveRes = await fetch('/api/save-quote', { method: 'POST', body: formData });
+      if(!saveRes.ok) {
+        let msg = 'Save failed';
+        try {
+          const err = await saveRes.json();
+          if (err?.error) msg = err.error;
+        } catch {}
+        throw new Error(msg);
+      }
+      const saveJson = await saveRes.json();
+      setQuoteId(saveJson.quote_id);
+      // DO NOT EDIT OUTSIDE THIS BLOCK
 
       setStatusText('Analyzing with OCR…');
       const ocrResults: OcrResult[] = [];
-      for (const file of Array.from(files)) {
+      for (const file of files) {
+        // NOTE: replace second arg if you later pass the storage path
         const ocr = await runOcr(file.name, file.name);
         ocrResults.push(ocr);
       }
@@ -127,7 +194,17 @@ const LandingPage: React.FC = () => {
       }));
       setResults(combined);
       setScreen('review');
-    } catch(err){
+} catch (err: any) {
+  console.error('Submit error:', err?.message || err);
+  const current = statusText.includes('OCR')
+    ? 'OCR'
+    : statusText.includes('Gemini')
+    ? 'Gemini'
+    : 'Upload';
+  setErrorStep(current);
+  setScreen('error');
+}
+
       const current = statusText.includes('OCR') ? 'OCR' : statusText.includes('Gemini') ? 'Gemini' : 'Upload';
       setErrorStep(current);
       setScreen('error');
@@ -210,10 +287,15 @@ const LandingPage: React.FC = () => {
       {/* Content */}
       <main className="flex-1 p-4">
         {screen === 'form' && (
-          <form onSubmit={handleSubmit} className="max-w-2xl mx-auto space-y-4">
+          <form onSubmit={handleSubmit} className="max-w-2xl mx-auto space-y-4" aria-busy={loadingDropdowns ? 'true' : undefined}>
             {Object.keys(errors).length > 0 && (
               <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
                 Please correct the highlighted fields.
+              </div>
+            )}
+            {dropdownError && (
+              <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
+                {dropdownError}
               </div>
             )}
             <div>
@@ -230,39 +312,93 @@ const LandingPage: React.FC = () => {
             </div>
             <div>
               <label className="block font-medium" htmlFor="intendedUse">Intended Use*</label>
-              <select id="intendedUse" value={intendedUse} onChange={e=>setIntendedUse(e.target.value)} aria-invalid={errors.intendedUse ? 'true' : undefined} className="w-full border p-2 rounded">
-                <option value="">Select...</option>
-                {intendedUseOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+              <select id="intendedUse" value={intendedUse} onChange={e=>setIntendedUse(e.target.value)} aria-invalid={errors.intendedUse ? 'true' : undefined} className="w-full border p-2 rounded" disabled={loadingDropdowns}>
+                <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
+                {intendedUses.map(opt => <option key={opt} value={opt}>{opt}</option>)}
               </select>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block font-medium" htmlFor="sourceLanguage">Source Language*</label>
-                <select id="sourceLanguage" value={sourceLanguage} onChange={e=>setSourceLanguage(e.target.value)} aria-invalid={errors.sourceLanguage ? 'true' : undefined} className="w-full border p-2 rounded">
-                  <option value="">Select...</option>
-                  {languageOptions.map(l => <option key={l} value={l}>{l}</option>)}
+                <select id="sourceLanguage" value={sourceLanguage} onChange={e=>setSourceLanguage(e.target.value)} aria-invalid={errors.sourceLanguage ? 'true' : undefined} className="w-full border p-2 rounded" disabled={loadingDropdowns}>
+                  <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
+                  {languages.map(l => <option key={l} value={l}>{l}</option>)}
                 </select>
               </div>
               <div>
                 <label className="block font-medium" htmlFor="targetLanguage">Target Language*</label>
-                <select id="targetLanguage" value={targetLanguage} onChange={e=>setTargetLanguage(e.target.value)} aria-invalid={errors.targetLanguage ? 'true' : undefined} className="w-full border p-2 rounded">
-                  <option value="">Select...</option>
-                  {languageOptions.map(l => <option key={l} value={l}>{l}</option>)}
+                <select id="targetLanguage" value={targetLanguage} onChange={e=>setTargetLanguage(e.target.value)} aria-invalid={errors.targetLanguage ? 'true' : undefined} className="w-full border p-2 rounded" disabled={loadingDropdowns}>
+                  <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
+                  {languages.map(l => <option key={l} value={l}>{l}</option>)}
                 </select>
               </div>
             </div>
             <div>
               <label className="block font-medium" htmlFor="files">Upload Files*</label>
-              <input id="files" type="file" multiple accept=".jpg,.jpeg,.png,.tiff,.doc,.docx,.pdf,.xls,.xlsx" onChange={e=>setFiles(e.target.files)} aria-invalid={errors.files ? 'true' : undefined} className="w-full border p-2 rounded" />
+              <input
+                ref={fileInputRef}
+                id="files"
+                type="file"
+                multiple
+                accept=".jpg,.jpeg,.png,.tiff,.doc,.docx,.pdf,.xls,.xlsx"
+                onChange={(e) => {
+                  const selected = Array.from(e.target.files || []);
+                  // de-dupe by name+size
+                  const byKey = new Map(files.map(f => [f.name + ':' + f.size, f]));
+                  for (const f of selected) byKey.set(f.name + ':' + f.size, f);
+                  setFiles(Array.from(byKey.values()));
+                }}
+                aria-invalid={errors.files ? 'true' : undefined}
+                className="w-full border p-2 rounded mt-1"
+              />
+              {files.length > 0 && (
+                <div className="mt-2 space-y-2">
+                  {files.map((f, idx) => (
+                    <div key={f.name + ':' + f.size} className="flex items-center justify-between rounded border p-2">
+                      <span className="text-sm truncate">{f.name}</span>
+                      <button
+                        type="button"
+                        className="text-xs underline"
+                        onClick={() => {
+                          const next = files.filter((_, i) => i !== idx);
+                          setFiles(next);
+                          if (next.length === 0 && fileInputRef.current) {
+                            fileInputRef.current.value = '';
+                          }
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    className="text-xs underline mt-1"
+                    onClick={() => {
+                      setFiles([]);
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                  >
+                    Remove all
+                  </button>
+                </div>
+              )}
             </div>
-            <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded">Submit</button>
+            <button
+              type="submit"
+              className="px-4 py-2 bg-indigo-600 text-white rounded disabled:opacity-60"
+              disabled={loadingDropdowns}
+              aria-disabled={loadingDropdowns ? 'true' : undefined}
+            >
+              {loadingDropdowns ? 'Loading options…' : 'Submit'}
+            </button>
           </form>
         )}
 
         {screen === 'waiting' && (
           <div className="flex flex-col items-center justify-center h-64 space-y-4">
             <Spinner />
-            <p>{statusText}</p>
+            <p>{statusText}{quoteId ? ` (ID: ${quoteId})` : ''}</p>
           </div>
         )}
 
