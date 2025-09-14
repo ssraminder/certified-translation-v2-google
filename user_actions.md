@@ -1,5 +1,76 @@
 # User Actions
 
+## 2025-09-14 — Harden Gemini Analyze Function
+
+- Added health handler to debug 502.
+- Implemented queued worker pattern in `gemini-analyze.ts`.
+- Function returns 202 immediately (no timeout).
+- Client polls for `gem_status` until success/error.
+- Verified environment variables (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`) must be set in Deploy Preview.
+- OCR code untouched.
+- No impact on pricing or payment flows.
+
+## 2025-09-14 — Add Gemini 2.0 Pro Analysis (Incremental)
+
+**What changed**
+- Added a new analysis step powered by Google **Gemini 2.0 Pro** to classify document type, detect language, list names, and rate manual re‑creation complexity (easy/medium/hard). This appears **below** the existing OCR results.
+
+**Database updates (run once in Supabase SQL Editor)**
+```sql
+ALTER TABLE IF EXISTS public.quote_files
+  ADD COLUMN IF NOT EXISTS gem_status text,
+  ADD COLUMN IF NOT EXISTS gem_message text,
+  ADD COLUMN IF NOT EXISTS gem_model text,
+  ADD COLUMN IF NOT EXISTS gem_doc_type text,
+  ADD COLUMN IF NOT EXISTS gem_language_code text,
+  ADD COLUMN IF NOT EXISTS gem_names jsonb,
+  ADD COLUMN IF NOT EXISTS gem_complexity_level text,
+  ADD COLUMN IF NOT EXISTS gem_started_at timestamptz,
+  ADD COLUMN IF NOT EXISTS gem_completed_at timestamptz;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.table_constraints
+    WHERE table_schema = 'public'
+      AND table_name = 'quote_files'
+      AND constraint_type = 'CHECK'
+      AND constraint_name = 'quote_files_gem_complexity_level_check'
+  ) THEN
+    ALTER TABLE public.quote_files
+      ADD CONSTRAINT quote_files_gem_complexity_level_check
+      CHECK (gem_complexity_level IN ('easy','medium','hard'));
+  END IF;
+END$$;
+
+CREATE INDEX IF NOT EXISTS quote_files_gem_status_idx
+  ON public.quote_files (gem_status);
+```
+
+**How to verify (no coding needed)**
+1. Upload a document as usual → OCR still runs automatically.
+2. Click **Run Gemini Analysis** (below OCR table).
+3. Wait a moment; the page will refresh the table automatically.
+4. Under each file, you should now see:
+   - **Document Type** (e.g., Passport)
+   - **Language** (e.g., en)
+   - **Names** (e.g., “John Smith, Jane Smith”)
+   - **Complexity** (easy / medium / hard)
+   - **Status** (success/error). If error appears, read the message text.
+5. Nothing else in the app changed (pricing, payment, or uploads).
+
+**What “complexity” means (plain English)**
+- *Easy* — mostly text; quick to reproduce by typing with simple formatting.
+- *Medium* — some layout/graphics (tables, logos, stamps); moderate effort.
+- *Hard* — complex visuals (forms, seals, watermarks, multi‑columns, handwriting); difficult to rebuild.
+
+**Roll‑back**
+- You can safely ignore these Gemini columns; they don’t affect OCR or payments.
+- To remove, drop the added columns and index; no data loss to existing features.
+
+# User Actions
+
 ## Database Setup
 ```sql
 create table if not exists public.quote_submissions (
