@@ -19,7 +19,8 @@ interface CombinedFile {
   pages: CombinedPage[];
 }
 
-const allowedExtensions = ['jpg','jpeg','png','tiff','doc','docx','pdf','xls','xlsx'];
+const allowedExtensions = ['jpg','jpeg','png','tiff','doc','docx','pdf','xls','xlsx'] as const;
+const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25MB, matches server limit
 
 function uniqSorted(arr: (string | null | undefined)[] = []) {
   return Array.from(new Set(arr.filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b));
@@ -109,17 +110,23 @@ const LandingPage: React.FC = () => {
   const validate = (): boolean => {
     const newErrors: Record<string,string> = {};
     if(!customerName.trim()) newErrors.customerName = 'Name is required';
-    if(!customerEmail.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) newErrors.customerEmail = 'Valid email required';
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) newErrors.customerEmail = 'Valid email required';
     if(!intendedUse) newErrors.intendedUse = 'Intended use required';
     if(!sourceLanguage) newErrors.sourceLanguage = 'Source language required';
     if(!targetLanguage) newErrors.targetLanguage = 'Target language required';
     if(files.length === 0) newErrors.files = 'At least one file required';
-    files.forEach(f => {
+
+    for (const f of files) {
       const ext = f.name.split('.').pop()?.toLowerCase();
-      if(!ext || !allowedExtensions.includes(ext)){
+      if(!ext || !allowedExtensions.includes(ext as any)){
         newErrors.files = 'Unsupported file type';
+        break;
       }
-    });
+      if (f.size > MAX_FILE_SIZE_BYTES) {
+        newErrors.files = `File too large (max ${(MAX_FILE_SIZE_BYTES/1024/1024)|0}MB)`;
+        break;
+      }
+    }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -141,7 +148,14 @@ const LandingPage: React.FC = () => {
       formData.append('targetLanguage', targetLanguage);
       files.forEach(f => formData.append('files[]', f));
       const saveRes = await fetch('/api/save-quote', { method: 'POST', body: formData });
-      if(!saveRes.ok) throw new Error('Save failed');
+      if(!saveRes.ok) {
+        let msg = 'Save failed';
+        try {
+          const err = await saveRes.json();
+          if (err?.error) msg = err.error;
+        } catch {}
+        throw new Error(msg);
+      }
       const saveJson = await saveRes.json();
       setQuoteId(saveJson.quote_id);
       // DO NOT EDIT OUTSIDE THIS BLOCK
@@ -149,6 +163,7 @@ const LandingPage: React.FC = () => {
       setStatusText('Analyzing with OCR…');
       const ocrResults: OcrResult[] = [];
       for (const file of files) {
+        // NOTE: replace second arg if you later pass the storage path
         const ocr = await runOcr(file.name, file.name);
         ocrResults.push(ocr);
       }
@@ -174,7 +189,8 @@ const LandingPage: React.FC = () => {
       }));
       setResults(combined);
       setScreen('review');
-    } catch(err){
+    } catch(err:any){
+      console.error('Submit error:', err?.message || err);
       const current = statusText.includes('OCR') ? 'OCR' : statusText.includes('Gemini') ? 'Gemini' : 'Upload';
       setErrorStep(current);
       setScreen('error');
@@ -257,7 +273,7 @@ const LandingPage: React.FC = () => {
       {/* Content */}
       <main className="flex-1 p-4">
         {screen === 'form' && (
-          <form onSubmit={handleSubmit} className="max-w-2xl mx-auto space-y-4">
+          <form onSubmit={handleSubmit} className="max-w-2xl mx-auto space-y-4" aria-busy={loadingDropdowns ? 'true' : undefined}>
             {Object.keys(errors).length > 0 && (
               <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
                 Please correct the highlighted fields.
@@ -282,23 +298,23 @@ const LandingPage: React.FC = () => {
             </div>
             <div>
               <label className="block font-medium" htmlFor="intendedUse">Intended Use*</label>
-              <select id="intendedUse" value={intendedUse} onChange={e=>setIntendedUse(e.target.value)} aria-invalid={errors.intendedUse ? 'true' : undefined} className="w-full border p-2 rounded">
-                <option value="">Select...</option>
+              <select id="intendedUse" value={intendedUse} onChange={e=>setIntendedUse(e.target.value)} aria-invalid={errors.intendedUse ? 'true' : undefined} className="w-full border p-2 rounded" disabled={loadingDropdowns}>
+                <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
                 {intendedUses.map(opt => <option key={opt} value={opt}>{opt}</option>)}
               </select>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block font-medium" htmlFor="sourceLanguage">Source Language*</label>
-                <select id="sourceLanguage" value={sourceLanguage} onChange={e=>setSourceLanguage(e.target.value)} aria-invalid={errors.sourceLanguage ? 'true' : undefined} className="w-full border p-2 rounded">
-                  <option value="">Select...</option>
+                <select id="sourceLanguage" value={sourceLanguage} onChange={e=>setSourceLanguage(e.target.value)} aria-invalid={errors.sourceLanguage ? 'true' : undefined} className="w-full border p-2 rounded" disabled={loadingDropdowns}>
+                  <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
                   {languages.map(l => <option key={l} value={l}>{l}</option>)}
                 </select>
               </div>
               <div>
                 <label className="block font-medium" htmlFor="targetLanguage">Target Language*</label>
-                <select id="targetLanguage" value={targetLanguage} onChange={e=>setTargetLanguage(e.target.value)} aria-invalid={errors.targetLanguage ? 'true' : undefined} className="w-full border p-2 rounded">
-                  <option value="">Select...</option>
+                <select id="targetLanguage" value={targetLanguage} onChange={e=>setTargetLanguage(e.target.value)} aria-invalid={errors.targetLanguage ? 'true' : undefined} className="w-full border p-2 rounded" disabled={loadingDropdowns}>
+                  <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
                   {languages.map(l => <option key={l} value={l}>{l}</option>)}
                 </select>
               </div>
@@ -313,6 +329,7 @@ const LandingPage: React.FC = () => {
                 accept=".jpg,.jpeg,.png,.tiff,.doc,.docx,.pdf,.xls,.xlsx"
                 onChange={(e) => {
                   const selected = Array.from(e.target.files || []);
+                  // de-dupe by name+size
                   const byKey = new Map(files.map(f => [f.name + ':' + f.size, f]));
                   for (const f of selected) byKey.set(f.name + ':' + f.size, f);
                   setFiles(Array.from(byKey.values()));
@@ -353,14 +370,21 @@ const LandingPage: React.FC = () => {
                 </div>
               )}
             </div>
-            <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded">Submit</button>
+            <button
+              type="submit"
+              className="px-4 py-2 bg-indigo-600 text-white rounded disabled:opacity-60"
+              disabled={loadingDropdowns}
+              aria-disabled={loadingDropdowns ? 'true' : undefined}
+            >
+              {loadingDropdowns ? 'Loading options…' : 'Submit'}
+            </button>
           </form>
         )}
 
         {screen === 'waiting' && (
           <div className="flex flex-col items-center justify-center h-64 space-y-4">
             <Spinner />
-            <p>{statusText}</p>
+            <p>{statusText}{quoteId ? ` (ID: ${quoteId})` : ''}</p>
           </div>
         )}
 
