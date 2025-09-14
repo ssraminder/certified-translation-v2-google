@@ -3,19 +3,17 @@ import type { Handler } from '@netlify/functions';
 import Busboy from 'busboy';
 import { createClient } from '@supabase/supabase-js';
 
-// Accept either SUPABASE_SERVICE_ROLE or SUPABASE_SERVICE_ROLE_KEY (your actual key)
 const SUPABASE_URL =
   process.env.SUPABASE_URL ||
-  process.env.SUPABASE_PROJECT_URL || // optional alias if you use one
+  process.env.SUPABASE_PROJECT_URL ||
   '';
 
 const SUPABASE_SERVICE_ROLE =
   process.env.SUPABASE_SERVICE_ROLE ||
-  process.env.SUPABASE_SERVICE_ROLE_KEY || // <- your env name
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
   '';
 
 export const handler: Handler = async (event) => {
-  // Enforce POST with proper 405 + Allow header
   if (event.httpMethod !== 'POST') {
     return {
       statusCode: 405,
@@ -24,7 +22,6 @@ export const handler: Handler = async (event) => {
     };
   }
 
-  // Env guard with clear error
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) {
     return {
       statusCode: 500,
@@ -33,29 +30,23 @@ export const handler: Handler = async (event) => {
     };
   }
 
-  // Parse multipart with Busboy (streaming)
   return await new Promise((resolve) => {
     const busboy = Busboy({
       headers: event.headers,
-      limits: { fileSize: 25 * 1024 * 1024 }, // 25MB per file
+      limits: { fileSize: 25 * 1024 * 1024 },
     });
 
     const fields: Record<string, string> = {};
     const uploads: { filename: string; data: Buffer; contentType: string }[] = [];
     let fileTooLarge = false;
 
-    busboy.on('field', (name, val) => {
-      fields[name] = val;
-    });
+    busboy.on('field', (name, val) => { fields[name] = val; });
 
     busboy.on('file', (_name, file, info) => {
       const { filename, mimeType } = info;
       const chunks: Buffer[] = [];
       file.on('data', (d) => chunks.push(d));
-      file.on('limit', () => {
-        fileTooLarge = true;
-        file.resume();
-      });
+      file.on('limit', () => { fileTooLarge = true; file.resume(); });
       file.on('end', () => {
         uploads.push({
           filename,
@@ -85,7 +76,6 @@ export const handler: Handler = async (event) => {
       try {
         const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE);
 
-        // 1) Insert submission → get quote_id
         const { data: submission, error: insertErr } = await supabase
           .from('quote_submissions')
           .insert({
@@ -104,13 +94,10 @@ export const handler: Handler = async (event) => {
         }
         const quoteId = submission.quote_id as string;
 
-        // 2) Upload files to bucket 'orders' at {quote_id}/{filename}
-        //    NOTE: path for .upload() is RELATIVE to the bucket (do NOT prefix with 'orders/')
         const saved: { file_name: string; storage_path: string; public_url: string | null }[] = [];
 
         for (const upload of uploads) {
           const pathWithinBucket = `${quoteId}/${upload.filename}`;
-
           const { error: uploadErr } = await supabase
             .storage
             .from('orders')
@@ -123,9 +110,8 @@ export const handler: Handler = async (event) => {
             throw new Error(uploadErr.message || 'Storage upload failed');
           }
 
-          // Keep bucket private for now → don't rely on public URL
           const storage_path = `orders/${pathWithinBucket}`;
-          const public_url = null;
+          const public_url = null; // keep bucket private
 
           const { error: fileErr } = await supabase.from('quote_files').insert({
             quote_id: quoteId,
