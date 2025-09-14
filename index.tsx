@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import LandingPage from './LandingPage';
+import './src/styles/cethos.css';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

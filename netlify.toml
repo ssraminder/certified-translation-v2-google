@@ -1,6 +1,7 @@
 [functions]
 directory = "netlify/functions"
 node_bundler = "esbuild"
+external_node_modules = ["@google/genai", "@getbrevo/brevo", "stripe"]
 
 [[redirects]]
 from = "/api/*"
