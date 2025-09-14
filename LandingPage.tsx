@@ -9,7 +9,7 @@ const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL as string;
 const supabaseAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY as string;
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-type Screen = 'form' | 'waiting' | 'result' | 'error';
+type Screen = 'form' | 'waiting' | 'review' | 'result' | 'error';
 
 interface CombinedPage {
   pageNumber: number;
@@ -36,6 +36,12 @@ const LandingPage: React.FC = () => {
 
   const [intendedUseOptions, setIntendedUseOptions] = useState<string[]>([]);
   const [languageOptions, setLanguageOptions] = useState<string[]>([]);
+  // DO NOT EDIT OUTSIDE THIS BLOCK
+  const [certTypes, setCertTypes] = useState<any[]>([]);
+  const [tiers, setTiers] = useState<any[]>([]);
+  const [languagesData, setLanguagesData] = useState<any[]>([]);
+  const [certificationMap, setCertificationMap] = useState<any[]>([]);
+  // DO NOT EDIT OUTSIDE THIS BLOCK
 
   const [errors, setErrors] = useState<Record<string,string>>({});
   const [screen, setScreen] = useState<Screen>('form');
@@ -46,11 +52,19 @@ const LandingPage: React.FC = () => {
 
   useEffect(() => {
     async function fetchOptions() {
-      const { data: uses } = await supabase.from('CertificationMap').select('intendedUse');
+      // DO NOT EDIT OUTSIDE THIS BLOCK
+      const { data: uses } = await supabase.from('CertificationMap').select('intendedUse, certType');
+      setCertificationMap(uses ?? []);
       const uniqueUses = Array.from(new Set((uses ?? []).map((u: any) => u.intendedUse).filter(Boolean)));
       setIntendedUseOptions(uniqueUses);
-      const { data: langs } = await supabase.from('Languages').select('name');
+      const { data: langs } = await supabase.from('Languages').select('name, tier');
+      setLanguagesData(langs ?? []);
       setLanguageOptions((langs ?? []).map((l: any) => l.name));
+      const { data: t } = await supabase.from('Tiers').select('tier, multiplier');
+      setTiers(t ?? []);
+      const { data: ct } = await supabase.from('CertificationTypes').select('certType, price');
+      setCertTypes(ct ?? []);
+      // DO NOT EDIT OUTSIDE THIS BLOCK
     }
     fetchOptions();
   }, []);
@@ -112,7 +126,7 @@ const LandingPage: React.FC = () => {
         }))
       }));
       setResults(combined);
-      setScreen('result');
+      setScreen('review');
     } catch(err){
       const current = statusText.includes('OCR') ? 'OCR' : statusText.includes('Gemini') ? 'Gemini' : 'Upload';
       setErrorStep(current);
@@ -120,13 +134,56 @@ const LandingPage: React.FC = () => {
     }
   };
 
-  const totalBillablePages = results.reduce((sum, file) => {
-    return sum + file.pages.reduce((s,p)=> s + Math.ceil(p.wordCount/250),0);
-  },0);
-  const perPageRate = 20;
-  const certType = intendedUse || 'Standard';
-  const certPrice = 50;
-  const finalTotal = perPageRate * totalBillablePages + certPrice;
+  // DO NOT EDIT OUTSIDE THIS BLOCK
+  const fileSummaries = results.map(file => ({
+    fileName: file.fileName,
+    pages: file.pages.reduce((s,p)=> s + Math.ceil(p.wordCount/250),0)
+  }));
+  const billablePagesTotal = fileSummaries.reduce((s,f)=> s + f.pages, 0);
+  const selectedCertTypeName = certificationMap.find((m:any)=>m.intendedUse===intendedUse)?.certType;
+  const selectedCertType = certTypes.find((c:any)=>c.certType===selectedCertTypeName);
+  const sourceTierName = languagesData.find((l:any)=>l.name===sourceLanguage)?.tier;
+  const targetTierName = languagesData.find((l:any)=>l.name===targetLanguage)?.tier;
+  const sourceTier = tiers.find((t:any)=>t.tier===sourceTierName);
+  const targetTier = tiers.find((t:any)=>t.tier===targetTierName);
+  const selectedTier = sourceTier && targetTier ? (sourceTier.multiplier > targetTier.multiplier ? sourceTier : targetTier) : (sourceTier || targetTier);
+  const base = selectedCertType?.price ?? 0;
+  const mult = selectedTier?.multiplier ?? 1;
+  const rate = +(base * mult).toFixed(2);
+  const total = +(rate * billablePagesTotal).toFixed(2);
+  // DO NOT EDIT OUTSIDE THIS BLOCK
+
+  // DO NOT EDIT OUTSIDE THIS BLOCK
+  const sendEmail = async () => {
+    try {
+      const res = await fetch('/api/send-quote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: customerName,
+          email: customerEmail,
+          phone: customerPhone,
+          intendedUse,
+          sourceLanguage,
+          targetLanguage,
+          rate,
+          billablePages: billablePagesTotal,
+          total,
+          files: fileSummaries.map(f => ({ name: f.fileName, pages: f.pages }))
+        })
+      });
+      if (res.ok) {
+        setScreen('result');
+      } else {
+        setErrorStep('Email');
+        setScreen('error');
+      }
+    } catch {
+      setErrorStep('Email');
+      setScreen('error');
+    }
+  };
+  // DO NOT EDIT OUTSIDE THIS BLOCK
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -216,49 +273,45 @@ const LandingPage: React.FC = () => {
           </div>
         )}
 
-        {screen === 'result' && (
+        {screen === 'review' && (
           <div className="space-y-6">
             <table className="min-w-full text-sm border">
               <thead>
                 <tr className="bg-gray-200 dark:bg-gray-700">
-                  <th className="p-2 border">File</th>
-                  <th className="p-2 border">Page</th>
-                  <th className="p-2 border">Wordcount</th>
-                  <th className="p-2 border">Complexity</th>
-                  <th className="p-2 border">Multiplier</th>
-                  <th className="p-2 border">PPWC</th>
-                  <th className="p-2 border">Billable Pages</th>
+                  <th className="p-2 border">Filename</th>
+                  <th className="p-2 border">Billable Pages (total)</th>
+                  <th className="p-2 border">Rate</th>
+                  <th className="p-2 border">Total</th>
                 </tr>
               </thead>
               <tbody>
-                {results.map(file => (
-                  <React.Fragment key={file.fileName}>
-                    {file.pages.map((p, idx) => {
-                      const ppwc = (p.wordCount * p.complexityMultiplier).toFixed(2);
-                      const billable = Math.ceil(p.wordCount/250);
-                      return (
-                        <tr key={idx} className="border-t">
-                          <td className="p-2 border">{idx===0 ? file.fileName : ''}</td>
-                          <td className="p-2 border">{p.pageNumber}</td>
-                          <td className="p-2 border">{p.wordCount}</td>
-                          <td className="p-2 border">{p.complexity}</td>
-                          <td className="p-2 border">{p.complexityMultiplier}</td>
-                          <td className="p-2 border">{ppwc}</td>
-                          <td className="p-2 border">{billable}</td>
-                        </tr>
-                      );
-                    })}
-                  </React.Fragment>
+                {fileSummaries.map(f => (
+                  <tr key={f.fileName} className="border-t">
+                    <td className="p-2 border">{f.fileName}</td>
+                    <td className="p-2 border">{f.pages}</td>
+                    <td className="p-2 border">${rate.toFixed(2)}</td>
+                    <td className="p-2 border">${(f.pages * rate).toFixed(2)}</td>
+                  </tr>
                 ))}
               </tbody>
+              <tfoot>
+                <tr className="font-semibold">
+                  <td className="p-2 border">Total Billable Pages</td>
+                  <td className="p-2 border">{billablePagesTotal}</td>
+                  <td className="p-2 border"></td>
+                  <td className="p-2 border">${total.toFixed(2)}</td>
+                </tr>
+              </tfoot>
             </table>
-            <div className="max-w-md p-4 border rounded">
-              <p>Per Page Rate: ${perPageRate}</p>
-              <p>Total Billable Pages: {totalBillablePages}</p>
-              <p>Certification Type: {certType}</p>
-              <p>Certification Price: ${certPrice}</p>
-              <p className="font-semibold">Final Total: ${finalTotal.toFixed(2)}</p>
+            <div className="flex space-x-2">
+              <button className="px-4 py-2 bg-gray-300 rounded" onClick={()=>setScreen('form')}>Back</button>
+              <button className="px-4 py-2 bg-indigo-600 text-white rounded" onClick={sendEmail}>Email your quote</button>
             </div>
+          </div>
+        )}
+        {screen === 'result' && (
+          <div className="max-w-md mx-auto text-center space-y-4">
+            <p className="text-green-700">Quote emailed successfully.</p>
             <button className="px-4 py-2 bg-indigo-600 text-white rounded" onClick={()=>setScreen('form')}>New Quote</button>
           </div>
         )}
