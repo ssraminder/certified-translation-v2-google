@@ -4,8 +4,7 @@ import Logo from './components/Logo';
 import { runOcr, OcrResult } from './integrations/googleVision';
 import { analyzeWithGemini, GeminiAnalysis } from './integrations/gemini';
 import supabase from './src/lib/supabaseClient';
-
-import supabase from './src/lib/supabaseClient';
+import { saveQuote, sendQuote } from 'api';
 
 type Screen = 'form' | 'waiting' | 'review' | 'result' | 'error';
 
@@ -59,7 +58,6 @@ const LandingPage: React.FC = () => {
   const [quoteId, setQuoteId] = useState<string | null>(null);
 
   useEffect(() => {
-useEffect(() => {
   let mounted = true;
   (async () => {
     try {
@@ -152,16 +150,7 @@ useEffect(() => {
       formData.append('sourceLanguage', sourceLanguage);
       formData.append('targetLanguage', targetLanguage);
       files.forEach(f => formData.append('files[]', f));
-      const saveRes = await fetch('/api/save-quote', { method: 'POST', body: formData });
-      if(!saveRes.ok) {
-        let msg = 'Save failed';
-        try {
-          const err = await saveRes.json();
-          if (err?.error) msg = err.error;
-        } catch {}
-        throw new Error(msg);
-      }
-      const saveJson = await saveRes.json();
+      const saveJson = await saveQuote(formData);
       setQuoteId(saveJson.quote_id);
       // DO NOT EDIT OUTSIDE THIS BLOCK
 
@@ -194,18 +183,13 @@ useEffect(() => {
       }));
       setResults(combined);
       setScreen('review');
-} catch (err: any) {
-  console.error('Submit error:', err?.message || err);
-  const current = statusText.includes('OCR')
-    ? 'OCR'
-    : statusText.includes('Gemini')
-    ? 'Gemini'
-    : 'Upload';
-  setErrorStep(current);
-  setScreen('error');
-}
-
-      const current = statusText.includes('OCR') ? 'OCR' : statusText.includes('Gemini') ? 'Gemini' : 'Upload';
+    } catch (err: any) {
+      console.error('Submit error:', err?.message || err);
+      const current = statusText.includes('OCR')
+        ? 'OCR'
+        : statusText.includes('Gemini')
+        ? 'Gemini'
+        : 'Upload';
       setErrorStep(current);
       setScreen('error');
     }
@@ -233,29 +217,21 @@ useEffect(() => {
   // DO NOT EDIT OUTSIDE THIS BLOCK
   const sendEmail = async () => {
     try {
-      const res = await fetch('/api/send-quote', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: customerName,
-          email: customerEmail,
-          phone: customerPhone,
-          intendedUse,
-          sourceLanguage,
-          targetLanguage,
-          rate,
-          billablePages: billablePagesTotal,
-          total,
-          files: fileSummaries.map(f => ({ name: f.fileName, pages: f.pages }))
-        })
+      await sendQuote({
+        name: customerName,
+        email: customerEmail,
+        phone: customerPhone,
+        intendedUse,
+        sourceLanguage,
+        targetLanguage,
+        rate,
+        billablePages: billablePagesTotal,
+        total,
+        files: fileSummaries.map(f => ({ name: f.fileName, pages: f.pages }))
       });
-      if (res.ok) {
-        setScreen('result');
-      } else {
-        setErrorStep('Email');
-        setScreen('error');
-      }
-    } catch {
+      setScreen('result');
+    } catch (err: any) {
+      console.error('Send quote failed:', err?.message || err);
       setErrorStep('Email');
       setScreen('error');
     }
@@ -285,114 +261,120 @@ useEffect(() => {
       </header>
 
       {/* Content */}
-      <main className="flex-1 p-4">
+      <main className="flex-1 p-4" id="instant-quote">
         {screen === 'form' && (
-          <form onSubmit={handleSubmit} className="max-w-2xl mx-auto space-y-4" aria-busy={loadingDropdowns ? 'true' : undefined}>
-            {Object.keys(errors).length > 0 && (
-              <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
-                Please correct the highlighted fields.
-              </div>
-            )}
-            {dropdownError && (
-              <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
-                {dropdownError}
-              </div>
-            )}
-            <div>
-              <label className="block font-medium" htmlFor="customerName">Name*</label>
-              <input id="customerName" type="text" value={customerName} onChange={e=>setCustomerName(e.target.value)} aria-invalid={errors.customerName ? 'true' : undefined} className="w-full border p-2 rounded" />
-            </div>
-            <div>
-              <label className="block font-medium" htmlFor="customerEmail">Email*</label>
-              <input id="customerEmail" type="email" value={customerEmail} onChange={e=>setCustomerEmail(e.target.value)} aria-invalid={errors.customerEmail ? 'true' : undefined} className="w-full border p-2 rounded" />
-            </div>
-            <div>
-              <label className="block font-medium" htmlFor="customerPhone">Phone</label>
-              <input id="customerPhone" type="tel" value={customerPhone} onChange={e=>setCustomerPhone(e.target.value)} className="w-full border p-2 rounded" />
-            </div>
-            <div>
-              <label className="block font-medium" htmlFor="intendedUse">Intended Use*</label>
-              <select id="intendedUse" value={intendedUse} onChange={e=>setIntendedUse(e.target.value)} aria-invalid={errors.intendedUse ? 'true' : undefined} className="w-full border p-2 rounded" disabled={loadingDropdowns}>
-                <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
-                {intendedUses.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-              </select>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block font-medium" htmlFor="sourceLanguage">Source Language*</label>
-                <select id="sourceLanguage" value={sourceLanguage} onChange={e=>setSourceLanguage(e.target.value)} aria-invalid={errors.sourceLanguage ? 'true' : undefined} className="w-full border p-2 rounded" disabled={loadingDropdowns}>
-                  <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
-                  {languages.map(l => <option key={l} value={l}>{l}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block font-medium" htmlFor="targetLanguage">Target Language*</label>
-                <select id="targetLanguage" value={targetLanguage} onChange={e=>setTargetLanguage(e.target.value)} aria-invalid={errors.targetLanguage ? 'true' : undefined} className="w-full border p-2 rounded" disabled={loadingDropdowns}>
-                  <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
-                  {languages.map(l => <option key={l} value={l}>{l}</option>)}
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="block font-medium" htmlFor="files">Upload Files*</label>
-              <input
-                ref={fileInputRef}
-                id="files"
-                type="file"
-                multiple
-                accept=".jpg,.jpeg,.png,.tiff,.doc,.docx,.pdf,.xls,.xlsx"
-                onChange={(e) => {
-                  const selected = Array.from(e.target.files || []);
-                  // de-dupe by name+size
-                  const byKey = new Map(files.map(f => [f.name + ':' + f.size, f]));
-                  for (const f of selected) byKey.set(f.name + ':' + f.size, f);
-                  setFiles(Array.from(byKey.values()));
-                }}
-                aria-invalid={errors.files ? 'true' : undefined}
-                className="w-full border p-2 rounded mt-1"
-              />
-              {files.length > 0 && (
-                <div className="mt-2 space-y-2">
-                  {files.map((f, idx) => (
-                    <div key={f.name + ':' + f.size} className="flex items-center justify-between rounded border p-2">
-                      <span className="text-sm truncate">{f.name}</span>
-                      <button
-                        type="button"
-                        className="text-xs underline"
-                        onClick={() => {
-                          const next = files.filter((_, i) => i !== idx);
-                          setFiles(next);
-                          if (next.length === 0 && fileInputRef.current) {
-                            fileInputRef.current.value = '';
-                          }
-                        }}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    className="text-xs underline mt-1"
-                    onClick={() => {
-                      setFiles([]);
-                      if (fileInputRef.current) fileInputRef.current.value = '';
-                    }}
-                  >
-                    Remove all
-                  </button>
+          <section className="card max-w-2xl mx-auto" data-ui="quote-form">
+            <h1 className="h1">Request a Certified Translation Quote</h1>
+            <p className="subtle">Fast. Accurate. IRCC & Alberta Government accepted.</p>
+            <form onSubmit={handleSubmit} aria-busy={loadingDropdowns ? 'true' : undefined}>
+              {Object.keys(errors).length > 0 && (
+                <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
+                  Please correct the highlighted fields.
                 </div>
               )}
-            </div>
-            <button
-              type="submit"
-              className="px-4 py-2 bg-indigo-600 text-white rounded disabled:opacity-60"
-              disabled={loadingDropdowns}
-              aria-disabled={loadingDropdowns ? 'true' : undefined}
-            >
-              {loadingDropdowns ? 'Loading options…' : 'Submit'}
-            </button>
-          </form>
+              {dropdownError && (
+                <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
+                  {dropdownError}
+                </div>
+              )}
+              <div className="form-grid">
+                <div className="field full">
+                  <label className="label" htmlFor="customerName">Name*</label>
+                  <input id="customerName" type="text" value={customerName} onChange={e=>setCustomerName(e.target.value)} aria-invalid={errors.customerName ? 'true' : undefined} className="input" />
+                </div>
+                <div className="field full">
+                  <label className="label" htmlFor="customerEmail">Email*</label>
+                  <input id="customerEmail" type="email" value={customerEmail} onChange={e=>setCustomerEmail(e.target.value)} aria-invalid={errors.customerEmail ? 'true' : undefined} className="input" />
+                </div>
+                <div className="field full">
+                  <label className="label" htmlFor="customerPhone">Phone</label>
+                  <input id="customerPhone" type="tel" value={customerPhone} onChange={e=>setCustomerPhone(e.target.value)} className="input" />
+                </div>
+                <div className="field full">
+                  <label className="label" htmlFor="intendedUse">Intended Use*</label>
+                  <select id="intendedUse" value={intendedUse} onChange={e=>setIntendedUse(e.target.value)} aria-invalid={errors.intendedUse ? 'true' : undefined} className="select" disabled={loadingDropdowns}>
+                    <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
+                    {intendedUses.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                  </select>
+                </div>
+                <div className="field">
+                  <label className="label" htmlFor="sourceLanguage">Source Language*</label>
+                  <select id="sourceLanguage" value={sourceLanguage} onChange={e=>setSourceLanguage(e.target.value)} aria-invalid={errors.sourceLanguage ? 'true' : undefined} className="select" disabled={loadingDropdowns}>
+                    <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
+                    {languages.map(l => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                </div>
+                <div className="field">
+                  <label className="label" htmlFor="targetLanguage">Target Language*</label>
+                  <select id="targetLanguage" value={targetLanguage} onChange={e=>setTargetLanguage(e.target.value)} aria-invalid={errors.targetLanguage ? 'true' : undefined} className="select" disabled={loadingDropdowns}>
+                    <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
+                    {languages.map(l => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                </div>
+                <div className="field full">
+                  <label className="upload full" htmlFor="files" aria-label="Upload files" role="button">
+                    <input
+                      ref={fileInputRef}
+                      id="files"
+                      type="file"
+                      multiple
+                      accept=".jpg,.jpeg,.png,.tiff,.doc,.docx,.pdf,.xls,.xlsx"
+                      onChange={(e) => {
+                        const selected = Array.from(e.target.files || []);
+                        // de-dupe by name+size
+                        const byKey = new Map(files.map(f => [f.name + ':' + f.size, f]));
+                        for (const f of selected) byKey.set(f.name + ':' + f.size, f);
+                        setFiles(Array.from(byKey.values()));
+                      }}
+                      aria-invalid={errors.files ? 'true' : undefined}
+                    />
+                    <div className="title">Drag & drop files here</div>
+                    <div className="note">or click to browse — multiple files supported</div>
+                  </label>
+                  {files.length > 0 && (
+                    <div className="file-list">
+                      {files.map((f, idx) => (
+                        <div key={f.name + ':' + f.size} className="file-item flex items-center justify-between rounded border p-2">
+                          <span className="text-sm truncate">{f.name}</span>
+                          <button
+                            type="button"
+                            className="remove text-xs underline"
+                            onClick={() => {
+                              const next = files.filter((_, i) => i !== idx);
+                              setFiles(next);
+                              if (next.length === 0 && fileInputRef.current) {
+                                fileInputRef.current.value = '';
+                              }
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        className="remove text-xs underline mt-1"
+                        onClick={() => {
+                          setFiles([]);
+                          if (fileInputRef.current) fileInputRef.current.value = '';
+                        }}
+                      >
+                        Remove all
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <button
+                type="submit"
+                className="btn btn-primary btn-block"
+                disabled={loadingDropdowns}
+                aria-disabled={loadingDropdowns ? 'true' : undefined}
+              >
+                {loadingDropdowns ? 'Loading options…' : 'Get Instant Quote'}
+              </button>
+            </form>
+          </section>
         )}
 
         {screen === 'waiting' && (
@@ -411,37 +393,44 @@ useEffect(() => {
 
         {screen === 'review' && (
           <div className="space-y-6">
-            <table className="min-w-full text-sm border">
-              <thead>
-                <tr className="bg-gray-200 dark:bg-gray-700">
-                  <th className="p-2 border">Filename</th>
-                  <th className="p-2 border">Billable Pages (total)</th>
-                  <th className="p-2 border">Rate</th>
-                  <th className="p-2 border">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fileSummaries.map(f => (
-                  <tr key={f.fileName} className="border-t">
-                    <td className="p-2 border">{f.fileName}</td>
-                    <td className="p-2 border">{f.pages}</td>
-                    <td className="p-2 border">${rate.toFixed(2)}</td>
-                    <td className="p-2 border">${(f.pages * rate).toFixed(2)}</td>
+            <h1 className="h1">Review Your Translation Quote</h1>
+            <p className="subtle">Transparent pricing. No hidden fees.</p>
+            <div className="table-card">
+              <table className="table" role="table">
+                <thead>
+                  <tr>
+                    <th>Filename</th>
+                    <th>Billable Pages (total)</th>
+                    <th>Rate</th>
+                    <th>Total</th>
                   </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="font-semibold">
-                  <td className="p-2 border">Total Billable Pages</td>
-                  <td className="p-2 border">{billablePagesTotal}</td>
-                  <td className="p-2 border"></td>
-                  <td className="p-2 border">${total.toFixed(2)}</td>
-                </tr>
-              </tfoot>
-            </table>
-            <div className="flex space-x-2">
-              <button className="px-4 py-2 bg-gray-300 rounded" onClick={()=>setScreen('form')}>Back</button>
-              <button className="px-4 py-2 bg-indigo-600 text-white rounded" onClick={sendEmail}>Email your quote</button>
+                </thead>
+                <tbody>
+                  {fileSummaries.map(f => (
+                    <tr key={f.fileName}>
+                      <td>{f.fileName}</td>
+                      <td>{f.pages}</td>
+                      <td>${rate.toFixed(2)}</td>
+                      <td>${(f.pages * rate).toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="total-row">
+                    <td>Total Billable Pages</td>
+                    <td>{billablePagesTotal}</td>
+                    <td></td>
+                    <td className="total-amount right">${total.toFixed(2)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+            <div className="row">
+              <button className="btn btn-success" onClick={()=>setScreen('form')}>🔒 Accept & Pay Securely</button>
+              <button className="btn btn-outline" onClick={sendEmail}>Email this Quote</button>
+            </div>
+            <div className="trust" aria-hidden="true">
+              <span>✅ IRCC Accepted</span><span>✅ Alberta Govt Approved</span><span>✅ Secure Payments</span>
             </div>
           </div>
         )}
@@ -461,3 +450,4 @@ useEffect(() => {
 };
 
 export default LandingPage;
+
