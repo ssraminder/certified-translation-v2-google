@@ -71,3 +71,22 @@ create policy "anon_insert_orders"
 ## Diagnostics
 - `/api/health` → `{ ok: true }`
 - `/api/env-check` → `{ hasViteSupabase: true }`
+
+## Netlify Environment
+- In Netlify site settings, add server-side variables:
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE`
+- Redeploy after saving changes.
+
+## Manual Test for `/api/save-quote`
+```bash
+curl -X POST https://<deploy-domain>/api/save-quote \
+  -F "name=Jane Doe" \
+  -F "email=jane@example.com" \
+  -F "phone=+15551234567" \
+  -F "intendedUse=Immigration" \
+  -F "sourceLanguage=English" \
+  -F "targetLanguage=Spanish" \
+  -F "files[]=@path/to/file.pdf"
+```
+- Verify row in `quote_submissions`, matching files in `quote_files`, and objects under `orders/{quote_id}/` in storage.
