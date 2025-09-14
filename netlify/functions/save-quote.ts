@@ -48,10 +48,15 @@ export const handler: Handler = async (event) => {
       file.on('data', (d) => chunks.push(d));
       file.on('limit', () => { fileTooLarge = true; file.resume(); });
       file.on('end', () => {
+        const guessedType =
+          mimeType ||
+          (filename.toLowerCase().endsWith('.pdf')
+            ? 'application/pdf'
+            : 'application/octet-stream'); // ensure correct content type for Supabase
         uploads.push({
           filename,
           data: Buffer.concat(chunks),
-          contentType: mimeType || 'application/octet-stream',
+          contentType: guessedType,
         });
       });
     });
@@ -76,16 +81,27 @@ export const handler: Handler = async (event) => {
       try {
         const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE);
 
+        // Fetch next human-readable CS quote_id
+        const { data: nextId, error: idErr } = await supabase.rpc(
+          'get_next_cs_quote_id'
+        );
+        if (idErr) {
+          console.error('Failed to fetch CS quote_id', idErr);
+        }
+
+        const insertPayload = {
+          name: fields.name,
+          email: fields.email,
+          phone: fields.phone,
+          intended_use: fields.intendedUse,
+          source_language: fields.sourceLanguage,
+          target_language: fields.targetLanguage,
+          quote_id: nextId || 'CS00000',
+        };
+
         const { data: submission, error: insertErr } = await supabase
           .from('quote_submissions')
-          .insert({
-            name: fields.name,
-            email: fields.email,
-            phone: fields.phone,
-            intended_use: fields.intendedUse,
-            source_language: fields.sourceLanguage,
-            target_language: fields.targetLanguage,
-          })
+          .insert(insertPayload)
           .select('quote_id')
           .single();
 
@@ -107,7 +123,9 @@ export const handler: Handler = async (event) => {
             });
 
           if (uploadErr) {
-            throw new Error(uploadErr.message || 'Storage upload failed');
+            throw new Error(
+              `Upload failed for ${upload.filename} at orders/${pathWithinBucket}: ${uploadErr.message}`
+            );
           }
 
           const storage_path = `orders/${pathWithinBucket}`;
