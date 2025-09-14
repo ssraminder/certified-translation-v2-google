@@ -4,8 +4,7 @@ import Logo from './components/Logo';
 import { runOcr, OcrResult } from './integrations/googleVision';
 import { analyzeWithGemini, GeminiAnalysis } from './integrations/gemini';
 import supabase from './src/lib/supabaseClient';
-
-import supabase from './src/lib/supabaseClient';
+import { saveQuote, sendQuote } from 'api';
 
 type Screen = 'form' | 'waiting' | 'review' | 'result' | 'error';
 
@@ -59,7 +58,6 @@ const LandingPage: React.FC = () => {
   const [quoteId, setQuoteId] = useState<string | null>(null);
 
   useEffect(() => {
-useEffect(() => {
   let mounted = true;
   (async () => {
     try {
@@ -152,16 +150,7 @@ useEffect(() => {
       formData.append('sourceLanguage', sourceLanguage);
       formData.append('targetLanguage', targetLanguage);
       files.forEach(f => formData.append('files[]', f));
-      const saveRes = await fetch('/api/save-quote', { method: 'POST', body: formData });
-      if(!saveRes.ok) {
-        let msg = 'Save failed';
-        try {
-          const err = await saveRes.json();
-          if (err?.error) msg = err.error;
-        } catch {}
-        throw new Error(msg);
-      }
-      const saveJson = await saveRes.json();
+      const saveJson = await saveQuote(formData);
       setQuoteId(saveJson.quote_id);
       // DO NOT EDIT OUTSIDE THIS BLOCK
 
@@ -194,18 +183,13 @@ useEffect(() => {
       }));
       setResults(combined);
       setScreen('review');
-} catch (err: any) {
-  console.error('Submit error:', err?.message || err);
-  const current = statusText.includes('OCR')
-    ? 'OCR'
-    : statusText.includes('Gemini')
-    ? 'Gemini'
-    : 'Upload';
-  setErrorStep(current);
-  setScreen('error');
-}
-
-      const current = statusText.includes('OCR') ? 'OCR' : statusText.includes('Gemini') ? 'Gemini' : 'Upload';
+    } catch (err: any) {
+      console.error('Submit error:', err?.message || err);
+      const current = statusText.includes('OCR')
+        ? 'OCR'
+        : statusText.includes('Gemini')
+        ? 'Gemini'
+        : 'Upload';
       setErrorStep(current);
       setScreen('error');
     }
@@ -233,29 +217,21 @@ useEffect(() => {
   // DO NOT EDIT OUTSIDE THIS BLOCK
   const sendEmail = async () => {
     try {
-      const res = await fetch('/api/send-quote', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: customerName,
-          email: customerEmail,
-          phone: customerPhone,
-          intendedUse,
-          sourceLanguage,
-          targetLanguage,
-          rate,
-          billablePages: billablePagesTotal,
-          total,
-          files: fileSummaries.map(f => ({ name: f.fileName, pages: f.pages }))
-        })
+      await sendQuote({
+        name: customerName,
+        email: customerEmail,
+        phone: customerPhone,
+        intendedUse,
+        sourceLanguage,
+        targetLanguage,
+        rate,
+        billablePages: billablePagesTotal,
+        total,
+        files: fileSummaries.map(f => ({ name: f.fileName, pages: f.pages }))
       });
-      if (res.ok) {
-        setScreen('result');
-      } else {
-        setErrorStep('Email');
-        setScreen('error');
-      }
-    } catch {
+      setScreen('result');
+    } catch (err: any) {
+      console.error('Send quote failed:', err?.message || err);
       setErrorStep('Email');
       setScreen('error');
     }
@@ -461,3 +437,4 @@ useEffect(() => {
 };
 
 export default LandingPage;
+
