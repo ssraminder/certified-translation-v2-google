@@ -48,10 +48,15 @@ export const handler: Handler = async (event) => {
       file.on('data', (d) => chunks.push(d));
       file.on('limit', () => { fileTooLarge = true; file.resume(); });
       file.on('end', () => {
+        const guessedType =
+          mimeType ||
+          (filename.toLowerCase().endsWith('.pdf')
+            ? 'application/pdf'
+            : 'application/octet-stream'); // ensure correct content type for Supabase
         uploads.push({
           filename,
           data: Buffer.concat(chunks),
-          contentType: mimeType || 'application/octet-stream',
+          contentType: guessedType,
         });
       });
     });
@@ -107,7 +112,9 @@ export const handler: Handler = async (event) => {
             });
 
           if (uploadErr) {
-            throw new Error(uploadErr.message || 'Storage upload failed');
+            throw new Error(
+              `Upload failed for ${upload.filename} at orders/${pathWithinBucket}: ${uploadErr.message}`
+            );
           }
 
           const storage_path = `orders/${pathWithinBucket}`;
