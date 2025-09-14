@@ -5,6 +5,8 @@ import { runOcr, OcrResult } from './integrations/googleVision';
 import { analyzeWithGemini, GeminiAnalysis } from './integrations/gemini';
 import supabase from './src/lib/supabaseClient';
 
+import supabase from './src/lib/supabaseClient';
+
 type Screen = 'form' | 'waiting' | 'review' | 'result' | 'error';
 
 interface CombinedPage {
@@ -40,6 +42,7 @@ const LandingPage: React.FC = () => {
   const [intendedUses, setIntendedUses] = useState<string[]>([]);
   const [loadingDropdowns, setLoadingDropdowns] = useState(false);
   const [dropdownError, setDropdownError] = useState<string | null>(null);
+
   // DO NOT EDIT OUTSIDE THIS BLOCK
   const [certTypes, setCertTypes] = useState<any[]>([]);
   const [tiers, setTiers] = useState<any[]>([]);
@@ -56,56 +59,58 @@ const LandingPage: React.FC = () => {
   const [quoteId, setQuoteId] = useState<string | null>(null);
 
   useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        setLoadingDropdowns(true);
-        setDropdownError(null);
+useEffect(() => {
+  let mounted = true;
+  (async () => {
+    try {
+      setLoadingDropdowns(true);
+      setDropdownError(null);
 
-        // DO NOT EDIT OUTSIDE THIS BLOCK
-        const { data: langRows, error: langErr } = await supabase
-          .from('languages')
-          .select('languagename, tier')
-          .order('languagename', { ascending: true });
-        if (langErr) throw langErr;
+      // DO NOT EDIT OUTSIDE THIS BLOCK
+      const { data: langRows, error: langErr } = await supabase
+        .from('languages')
+        .select('languagename, tier')
+        .order('languagename', { ascending: true });
+      if (langErr) throw langErr;
 
-        const { data: tierRows, error: tierErr } = await supabase
-          .from('tiers')
-          .select('tier, multiplier')
-          .order('tier', { ascending: true });
-        if (tierErr) throw tierErr;
+      const { data: tierRows, error: tierErr } = await supabase
+        .from('tiers')
+        .select('tier, multiplier')
+        .order('tier', { ascending: true });
+      if (tierErr) throw tierErr;
 
-        const { data: ctypeRows, error: ctypeErr } = await supabase
-          .from('certificationtypes')
-          .select('certtype, price')
-          .order('certtype', { ascending: true });
-        if (ctypeErr) throw ctypeErr;
+      const { data: ctypeRows, error: ctypeErr } = await supabase
+        .from('certificationtypes')
+        .select('certtype, price')
+        .order('certtype', { ascending: true });
+      if (ctypeErr) throw ctypeErr;
 
-        const { data: cmapRows, error: cmapErr } = await supabase
-          .from('certificationmap')
-          .select('intendeduse, certtype')
-          .order('intendeduse', { ascending: true });
-        if (cmapErr) throw cmapErr;
+      const { data: cmapRows, error: cmapErr } = await supabase
+        .from('certificationmap')
+        .select('intendeduse, certtype')
+        .order('intendeduse', { ascending: true });
+      if (cmapErr) throw cmapErr;
 
-        if (!mounted) return;
-        setLanguagesData((langRows ?? []).map(r => ({ name: r.languagename, tier: r.tier })));
-        setLanguages(uniqSorted((langRows ?? []).map(r => r.languagename)));
-        setTiers(tierRows ?? []);
-        setCertTypes((ctypeRows ?? []).map(r => ({ certType: r.certtype, price: r.price })));
-        setCertificationMap((cmapRows ?? []).map(r => ({ intendedUse: r.intendeduse, certType: r.certtype })));
-        setIntendedUses(uniqSorted((cmapRows ?? []).map(r => r.intendeduse)));
-        // DO NOT EDIT OUTSIDE THIS BLOCK
-      } catch (e: any) {
-        if (mounted) setDropdownError('Could not load form options. Please retry.');
-        console.error('Dropdown fetch failed:', e?.message || e);
-      } finally {
-        if (mounted) setLoadingDropdowns(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+      if (!mounted) return;
+      setLanguagesData((langRows ?? []).map(r => ({ name: r.languagename, tier: r.tier })));
+      setLanguages(uniqSorted((langRows ?? []).map(r => r.languagename)));
+      setTiers(tierRows ?? []);
+      setCertTypes((ctypeRows ?? []).map(r => ({ certType: r.certtype, price: r.price })));
+      setCertificationMap((cmapRows ?? []).map(r => ({ intendedUse: r.intendeduse, certType: r.certtype })));
+      setIntendedUses(uniqSorted((cmapRows ?? []).map(r => r.intendeduse)));
+      // DO NOT EDIT OUTSIDE THIS BLOCK
+    } catch (e: any) {
+      if (mounted) setDropdownError('Could not load form options. Please retry.');
+      console.error('Dropdown fetch failed:', e?.message || e);
+    } finally {
+      if (mounted) setLoadingDropdowns(false);
+    }
+  })();
+  return () => {
+    mounted = false;
+  };
+}, []);
+
 
   const validate = (): boolean => {
     const newErrors: Record<string,string> = {};
@@ -189,8 +194,17 @@ const LandingPage: React.FC = () => {
       }));
       setResults(combined);
       setScreen('review');
-    } catch(err:any){
-      console.error('Submit error:', err?.message || err);
+} catch (err: any) {
+  console.error('Submit error:', err?.message || err);
+  const current = statusText.includes('OCR')
+    ? 'OCR'
+    : statusText.includes('Gemini')
+    ? 'Gemini'
+    : 'Upload';
+  setErrorStep(current);
+  setScreen('error');
+}
+
       const current = statusText.includes('OCR') ? 'OCR' : statusText.includes('Gemini') ? 'Gemini' : 'Upload';
       setErrorStep(current);
       setScreen('error');
