@@ -42,3 +42,32 @@ create index if not exists quote_files_quote_id_idx on public.quote_files(quote_
 4. Ensure the frontend receives and stores the returned `quote_id`.
 5. Hidden fields (`certification type`, `tier`) remain absent from the UI.
 6. No email is sent during this flow.
+
+## Row Level Security and Storage Policies
+```sql
+alter table public.quote_submissions enable row level security;
+alter table public.quote_files enable row level security;
+
+create policy "anon_insert_quote_submissions"
+  on public.quote_submissions for insert
+  to anon
+  with check (true);
+
+create policy "anon_insert_quote_files"
+  on public.quote_files for insert
+  to anon
+  with check (true);
+
+create policy "anon_insert_orders"
+  on storage.objects for insert
+  to anon
+  with check (bucket_id = 'orders');
+```
+
+## Deploy Preview Environment
+- Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the Deploy Preview environment.
+- Clear the build cache and trigger a fresh deploy.
+
+## Diagnostics
+- `/api/health` → `{ ok: true }`
+- `/api/env-check` → `{ hasViteSupabase: true }`

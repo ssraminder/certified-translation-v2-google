@@ -1,14 +1,18 @@
+/// <reference types="vite/client" />
 import { createClient } from '@supabase/supabase-js';
 
-const url = (import.meta as any).env.VITE_SUPABASE_URL as string | undefined;
-const anonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY as string | undefined;
+const url = import.meta.env.VITE_SUPABASE_URL;
+const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-if (!url || url.includes('YOUR_SUPABASE_URL')) {
-  throw new Error('VITE_SUPABASE_URL is not set');
-}
-if (!anonKey || anonKey.includes('YOUR_SUPABASE_ANON_KEY')) {
-  throw new Error('VITE_SUPABASE_ANON_KEY is not set');
+if (!url || !key || /YOUR_|PLACEHOLDER|^$/.test(url) || /YOUR_|PLACEHOLDER|^$/.test(key)) {
+  throw new Error('Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY in this environment.');
 }
 
-const supabase = createClient(url, anonKey);
+if (import.meta.env.VITE_DEBUG_PREVIEW === 'true') {
+  console.log('Preview debug:', {
+    hasViteSupabase: !!url && !!key,
+  });
+}
+
+const supabase = createClient(url, key);
 export default supabase;
