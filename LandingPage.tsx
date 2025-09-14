@@ -209,7 +209,7 @@ useEffect(() => {
       setErrorStep(current);
       setScreen('error');
     }
-  };
+  }
 
   // DO NOT EDIT OUTSIDE THIS BLOCK
   const fileSummaries = results.map(file => ({
