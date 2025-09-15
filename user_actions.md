@@ -199,3 +199,13 @@ curl -X POST https://<deploy-domain>/api/save-quote \
 
 **Rollback**
 - No schema changes in this patch; you can revert this function/client diff without affecting OCR or payments.
+
+## 2025-09-15 01:07 PM MDT — Fix Supabase quote_files filtering
+
+**ISO timestamp:** 2025-09-15T19:07:48.503512+00:00
+
+**Actions Summary**
+- Implemented Option A (two-step) to support filtering `quote_files` by `quote_code` without PostgREST 400s.
+- Added robust error surfacing for PostgREST responses while keeping user-facing messaging concise.
+- Kept UI and unrelated integrations unchanged.
+- Verified with test requests using the new helper and documented the steps.

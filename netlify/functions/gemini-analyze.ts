@@ -9,6 +9,9 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const VISION_API_KEY = process.env.API_KEY || '';
 
+const UUID_REGEX =
+  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
 function formatErrorMessage(err: any, fallback = 'Unknown error'): string {
   try {
     if (!err) return fallback;
@@ -82,16 +85,68 @@ export const handler: Handler = async (event) => {
   }
 };
 
+async function resolveQuoteIdentifier(
+  supabase: any,
+  identifier: string
+): Promise<string> {
+  if (UUID_REGEX.test(identifier)) {
+    return identifier;
+  }
+
+  for (const column of ['quote_code', 'quote_id'] as const) {
+    const { data, error } = await supabase
+      .from('quote_submissions')
+      .select('id, quote_id')
+      .eq(column, identifier)
+      .maybeSingle();
+
+    if (error) {
+      console.error(
+        `quote_submissions lookup failed (${column})`,
+        error?.message || error
+      );
+      continue;
+    }
+    if (data?.id) {
+      return data.id;
+    }
+  }
+
+  return identifier;
+}
+
 async function queueGeminiForQuote(quoteId: string) {
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
   const model = genAI.getGenerativeModel({ model: MODEL });
 
-  const { data: files } = await supabase
-    .from('quote_files')
-    .select('id, file_name, storage_path, gem_status')
-    .eq('quote_id', quoteId)
-    .or('gem_status.is.null,gem_status.eq.pending,gem_status.eq.error');
+  const resolvedIdentifier = await resolveQuoteIdentifier(supabase, quoteId);
+  const candidates = Array.from(
+    new Set([resolvedIdentifier, quoteId].filter(Boolean))
+  );
+
+  let files: any[] | null = null;
+
+  for (const candidate of candidates) {
+    const { data, error } = await supabase
+      .from('quote_files')
+      .select('id, file_name, storage_path, gem_status')
+      .eq('quote_id', candidate)
+      .or('gem_status.is.null,gem_status.eq.pending,gem_status.eq.error');
+
+    if (error) {
+      console.error(
+        'quote_files fetch failed',
+        { candidate, message: error?.message || error }
+      );
+      continue;
+    }
+
+    files = data || [];
+    if (files.length > 0) {
+      break;
+    }
+  }
 
   if (!files) return;
 

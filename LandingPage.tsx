@@ -4,7 +4,7 @@ import Logo from './components/Logo';
 import { runOcr, OcrResult as MockOcrResult } from './integrations/googleVision';
 import { analyzeWithGemini, GeminiAnalysis } from './integrations/gemini';
 import supabase from './src/lib/supabaseClient';
-import { saveQuote, sendQuote, runVisionOcr, runGeminiAnalyze } from 'api';
+import { saveQuote, sendQuote, runVisionOcr, runGeminiAnalyze, fetchQuoteFiles } from 'api';
 import type { OcrResult as VisionOcrResult } from './types';
 
 type Screen = 'form' | 'waiting' | 'review' | 'result' | 'error';
@@ -291,17 +291,23 @@ const LandingPage: React.FC = () => {
     const max = 20;
     const iv = setInterval(async () => {
       tries++;
-      const { data } = await supabase
-        .from('quote_files')
-        .select(
-          'file_name, gem_page_complexity, gem_page_doc_types, gem_page_names, gem_page_languages, gem_languages_all, gem_status, gem_message'
-        )
-        .eq('quote_id', qid);
-      setGemResults(data || []);
-      const done = (data || []).every((r: any) => ['success', 'error'].includes(r.gem_status || ''));
-      if (done || tries >= max) {
-        clearInterval(iv);
-        setGemLoading(false);
+      try {
+        const rows = await fetchQuoteFiles(qid);
+        setGemResults(rows || []);
+        const done = (rows || []).every((r: any) =>
+          ['success', 'error'].includes(r?.gem_status || '')
+        );
+        if (done || tries >= max) {
+          clearInterval(iv);
+          setGemLoading(false);
+        }
+      } catch (err: any) {
+        console.error('Gemini polling failed:', err?.message || err);
+        if (tries >= max) {
+          setGemError('Unable to retrieve Gemini status for this quote.');
+          clearInterval(iv);
+          setGemLoading(false);
+        }
       }
     }, 1500);
   };
