@@ -9,9 +9,6 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const VISION_API_KEY = process.env.API_KEY || '';
 
-const UUID_REGEX =
-  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
-
 function formatErrorMessage(err: any, fallback = 'Unknown error'): string {
   try {
     if (!err) return fallback;
@@ -89,30 +86,20 @@ async function resolveQuoteIdentifier(
   supabase: any,
   identifier: string
 ): Promise<string> {
-  if (UUID_REGEX.test(identifier)) {
-    return identifier;
+  const { data, error } = await supabase
+    .from('quote_submissions')
+    .select('quote_id')
+    .eq('quote_id', identifier)
+    .maybeSingle();
+
+  if (error) {
+    console.error(
+      'quote_submissions lookup failed (quote_id)',
+      error?.message || error
+    );
   }
 
-  for (const column of ['quote_code', 'quote_id'] as const) {
-    const { data, error } = await supabase
-      .from('quote_submissions')
-      .select('id, quote_id')
-      .eq(column, identifier)
-      .maybeSingle();
-
-    if (error) {
-      console.error(
-        `quote_submissions lookup failed (${column})`,
-        error?.message || error
-      );
-      continue;
-    }
-    if (data?.id) {
-      return data.id;
-    }
-  }
-
-  return identifier;
+  return data?.quote_id || identifier;
 }
 
 async function queueGeminiForQuote(quoteId: string) {
@@ -121,34 +108,21 @@ async function queueGeminiForQuote(quoteId: string) {
   const model = genAI.getGenerativeModel({ model: MODEL });
 
   const resolvedIdentifier = await resolveQuoteIdentifier(supabase, quoteId);
-  const candidates = Array.from(
-    new Set([resolvedIdentifier, quoteId].filter(Boolean))
-  );
 
-  let files: any[] | null = null;
+  const { data: files, error: filesErr } = await supabase
+    .from('quote_files')
+    .select('id, file_name, storage_path, gem_status')
+    .eq('quote_id', resolvedIdentifier)
+    .or('gem_status.is.null,gem_status.eq.pending,gem_status.eq.error');
 
-  for (const candidate of candidates) {
-    const { data, error } = await supabase
-      .from('quote_files')
-      .select('id, file_name, storage_path, gem_status')
-      .eq('quote_id', candidate)
-      .or('gem_status.is.null,gem_status.eq.pending,gem_status.eq.error');
-
-    if (error) {
-      console.error(
-        'quote_files fetch failed',
-        { candidate, message: error?.message || error }
-      );
-      continue;
-    }
-
-    files = data || [];
-    if (files.length > 0) {
-      break;
-    }
+  if (filesErr) {
+    console.error('quote_files fetch failed', filesErr?.message || filesErr);
+    return;
   }
 
-  if (!files) return;
+  if (!files || files.length === 0) {
+    return;
+  }
 
   for (const f of files) {
     try {
@@ -175,7 +149,6 @@ async function queueGeminiForQuote(quoteId: string) {
       const pageComplexity: Record<string, string> = {};
       const pageDocTypes: Record<string, string> = {};
       const pageNames: Record<string, string[]> = {};
-      const pageLanguages: Record<string, string[]> = {};
       const langSet = new Set<string>();
 
       for (let i = 0; i < pageTexts.length; i++) {
@@ -202,19 +175,39 @@ async function queueGeminiForQuote(quoteId: string) {
         pageComplexity[pageNum] = complexity;
         pageDocTypes[pageNum] = cls.docType;
         pageNames[pageNum] = cls.names;
-        pageLanguages[pageNum] = cls.languageCodes;
         cls.languageCodes.forEach((l) => langSet.add(l));
       }
+
+      const complexityLevels = Object.values(pageComplexity).filter(
+        (value): value is string => typeof value === 'string' && value.length > 0
+      );
+      const docTypes = Object.values(pageDocTypes).filter(
+        (value): value is string => typeof value === 'string' && value.length > 0
+      );
+      const collectedNames = Object.values(pageNames).reduce<string[]>(
+        (acc, value) => {
+          if (Array.isArray(value)) {
+            return acc.concat(value.filter((v) => typeof v === 'string' && v.length > 0));
+          }
+          return acc;
+        },
+        []
+      );
+      const languageCodes = Array.from(langSet).filter(
+        (value): value is string => typeof value === 'string' && value.length > 0
+      );
 
       await supabase
         .from('quote_files')
         .update({
-          gem_page_complexity: pageComplexity,
-          gem_page_doc_types: pageDocTypes,
-          gem_page_names: pageNames,
-          gem_page_languages: pageLanguages,
-          gem_languages_all: Array.from(langSet),
           gem_model: MODEL,
+          gem_doc_type: docTypes[0] || null,
+          gem_language_code: languageCodes[0] || null,
+          gem_names:
+            collectedNames.length > 0
+              ? collectedNames.slice(0, 50)
+              : null,
+          gem_complexity_level: complexityLevels[0] || null,
         })
         .eq('id', f.id);
 

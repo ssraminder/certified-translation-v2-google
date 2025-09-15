@@ -1,25 +1,32 @@
 const QUOTE_FILE_COLUMNS = [
   'file_name',
-  'gem_page_complexity',
-  'gem_page_doc_types',
-  'gem_page_names',
-  'gem_page_languages',
-  'gem_languages_all',
+  'public_url',
+  'created_at',
   'gem_status',
-  'gem_message'
+  'gem_message',
+  'gem_model',
+  'gem_doc_type',
+  'gem_language_code',
+  'gem_names',
+  'gem_complexity_level',
+  'gem_started_at',
+  'gem_completed_at'
 ];
-
-const UUID_REGEX = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 type QuoteFileRow = {
   file_name: string;
+  public_url: string | null;
+  created_at: string | null;
+  gem_status: string | null;
+  gem_message: string | null;
+  gem_model: string | null;
   gem_page_complexity: Record<string, string> | null;
   gem_page_doc_types: Record<string, string> | null;
   gem_page_names: Record<string, string[]> | null;
   gem_page_languages: Record<string, string[]> | null;
   gem_languages_all: string[] | null;
-  gem_status: string | null;
-  gem_message: string | null;
+  gem_started_at: string | null;
+  gem_completed_at: string | null;
 };
 
 function getSupabaseConfig() {
@@ -31,76 +38,70 @@ function getSupabaseConfig() {
   return { baseUrl, anonKey } as const;
 }
 
-async function fetchJson(url: URL, headers: Record<string, string>, logContext: string) {
-  const response = await fetch(url.toString(), { headers });
-  if (!response.ok) {
-    const body = await response.text();
-    console.error(`${logContext} — PostgREST ${response.status}: ${body}`);
+async function restGet(url: string, anonKey: string, profile?: string) {
+  const headers: Record<string, string> = {
+    apikey: anonKey,
+    Authorization: `Bearer ${anonKey}`,
+  };
+  if (profile) headers['Accept-Profile'] = profile;
+  const res = await fetch(url, { headers });
+  const text = await res.text();
+  if (!res.ok) {
+    console.error(`PostgREST ${res.status}: ${text}`);
     throw new Error('Upstream request failed');
   }
-  return response.json();
+  return text ? JSON.parse(text) : null;
 }
 
-async function tryFetchSubmissionId(
-  quoteCode: string,
-  baseUrl: string,
-  headers: Record<string, string>
-): Promise<string | null> {
-  for (const column of ['quote_code', 'quote_id'] as const) {
-    const url = new URL(`${baseUrl}/rest/v1/quote_submissions`);
-    url.searchParams.set('select', 'id,quote_id');
-    url.searchParams.set(column, `eq.${quoteCode}`);
-    try {
-      const rows = await fetchJson(url, headers, `quote_submissions lookup (${column})`);
-      if (Array.isArray(rows) && rows[0]) {
-        return rows[0].id || rows[0].quote_id || null;
-      }
-    } catch (err) {
-      // Continue to the next column option.
-    }
-  }
-  return null;
+function normalizeQuoteFileRow(row: any): QuoteFileRow {
+  const complexity = row?.gem_complexity_level;
+  const docType = row?.gem_doc_type;
+  const language = row?.gem_language_code;
+  const names = Array.isArray(row?.gem_names)
+    ? row.gem_names
+    : typeof row?.gem_names === 'string'
+      ? (() => {
+          try {
+            const parsed = JSON.parse(row.gem_names);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        })()
+      : [];
+
+  const hasComplexity = typeof complexity === 'string' && complexity.length > 0;
+  const pageKey = '1';
+
+  return {
+    file_name: row?.file_name ?? '',
+    public_url: row?.public_url ?? null,
+    created_at: row?.created_at ?? null,
+    gem_status: row?.gem_status ?? null,
+    gem_message: row?.gem_message ?? null,
+    gem_model: row?.gem_model ?? null,
+    gem_page_complexity: hasComplexity ? { [pageKey]: complexity } : null,
+    gem_page_doc_types: docType ? { [pageKey]: docType } : null,
+    gem_page_names: names.length > 0 ? { [pageKey]: names } : null,
+    gem_page_languages: language ? { [pageKey]: [language] } : null,
+    gem_languages_all: language ? [language] : null,
+    gem_started_at: row?.gem_started_at ?? null,
+    gem_completed_at: row?.gem_completed_at ?? null,
+  };
 }
 
 export async function fetchQuoteFiles(quoteIdentifier: string): Promise<QuoteFileRow[]> {
   const { baseUrl, anonKey } = getSupabaseConfig();
-  const headers = {
-    apikey: anonKey,
-    Authorization: `Bearer ${anonKey}`,
-  };
-
   const selectors = QUOTE_FILE_COLUMNS.join(',');
-  const queries: Array<{ column: string; value: string }> = [];
+  const url = new URL(`${baseUrl}/rest/v1/quote_files`);
+  url.searchParams.set('select', selectors);
+  url.searchParams.set('quote_id', `eq.${quoteIdentifier}`);
+  url.searchParams.set('order', 'created_at.desc');
 
-  if (UUID_REGEX.test(quoteIdentifier)) {
-    queries.push({ column: 'quote_id', value: quoteIdentifier });
-  } else {
-    const submissionId = await tryFetchSubmissionId(quoteIdentifier, baseUrl, headers);
-    if (submissionId) {
-      queries.push({ column: 'quote_id', value: submissionId });
-    }
-    queries.push({ column: 'quote_id', value: quoteIdentifier });
+  const rows = await restGet(url.toString(), anonKey, 'public');
+  if (!Array.isArray(rows)) {
+    return [];
   }
 
-  let lastError: Error | null = null;
-
-  for (const query of queries) {
-    const url = new URL(`${baseUrl}/rest/v1/quote_files`);
-    url.searchParams.set('select', selectors);
-    url.searchParams.set(query.column, `eq.${query.value}`);
-    try {
-      const rows = await fetchJson(url, headers, `quote_files lookup (${query.column})`);
-      if (Array.isArray(rows)) {
-        return rows as QuoteFileRow[];
-      }
-    } catch (err: any) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-    }
-  }
-
-  if (lastError) {
-    throw lastError;
-  }
-
-  return [];
+  return rows.map(normalizeQuoteFileRow);
 }

@@ -209,3 +209,12 @@ curl -X POST https://<deploy-domain>/api/save-quote \
 - Added robust error surfacing for PostgREST responses while keeping user-facing messaging concise.
 - Kept UI and unrelated integrations unchanged.
 - Verified with test requests using the new helper and documented the steps.
+
+## 2025-09-15 03:45 PM MDT — Align Supabase REST schema usage
+
+**ISO timestamp:** 2025-09-15T21:45:12.000000+00:00
+
+**Actions Summary**
+- Updated Gemini background worker to read/write only existing `quote_files` columns (`gem_doc_type`, `gem_language_code`, etc.) while keeping status updates unchanged.
+- Simplified REST helpers to filter `quote_files` by `quote_id` and map results to legacy field names without selecting missing columns.
+- Confirmed no UI or layout adjustments were required and documented the schema alignment.
