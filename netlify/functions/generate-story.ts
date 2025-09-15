@@ -1,7 +1,7 @@
 // This is a serverless function that supports streaming responses.
 // File path: /netlify/functions/generate-story.ts
 import { Handler } from '@netlify/functions';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenerativeAI } from '@google/generative-ai/server';
 import { ensureMethod } from './utils/ensureMethod';
 
 /**
@@ -29,14 +29,17 @@ function iteratorToStream(iterator: AsyncGenerator<string>) {
  * An async generator function that yields story chunks from the Gemini API.
  */
 async function* generateGeminiStream(prompt: string, apiKey: string) {
-    const ai = new GoogleGenAI({ apiKey });
-    const stream = await ai.models.generateContentStream({
-        model: 'gemini-2.5-flash',
-        contents: `Write a short story about: ${prompt}`,
-    });
-    for await (const chunk of stream) {
-        yield chunk.text;
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const result = await model.generateContentStream(
+    `Write a short story about: ${prompt}`
+  );
+  for await (const chunk of result.stream) {
+    const chunkText = chunk.text();
+    if (chunkText) {
+      yield chunkText;
     }
+  }
 }
 
 export const handler: Handler = async (event) => {

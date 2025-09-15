@@ -2,7 +2,7 @@
 // This is an example of a serverless function.
 // File path could be: /api/test-gemini.ts
 
-// import { GoogleGenAI } from '@google/genai';
+// import { GoogleGenerativeAI } from '@google/generative-ai/server';
 // import type { Request, Response } from 'express';
 
 /*

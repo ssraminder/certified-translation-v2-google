@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Spinner from './components/Spinner';
 import Logo from './components/Logo';
-import { runOcr, OcrResult } from './integrations/googleVision';
+import { runOcr, OcrResult as MockOcrResult } from './integrations/googleVision';
 import { analyzeWithGemini, GeminiAnalysis } from './integrations/gemini';
 import supabase from './src/lib/supabaseClient';
-
-import supabase from './src/lib/supabaseClient';
+import { saveQuote, sendQuote, runVisionOcr, runGeminiAnalyze } from 'api';
+import type { OcrResult as VisionOcrResult } from './types';
 
 type Screen = 'form' | 'waiting' | 'review' | 'result' | 'error';
 
@@ -21,7 +21,22 @@ interface CombinedFile {
   pages: CombinedPage[];
 }
 
-const allowedExtensions = ['jpg','jpeg','png','tiff','doc','docx','pdf','xls','xlsx'] as const;
+// allow images and common document types
+const ALLOWED_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+
+// check file type against allow list (fallback to extension)
+const isAllowed = (file: File) =>
+  ALLOWED_TYPES.has(file.type) ||
+  (!file.type && /\.(pdf|docx|xlsx)$/i.test(file.name));
+
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25MB, matches server limit
 
 function uniqSorted(arr: (string | null | undefined)[] = []) {
@@ -57,9 +72,14 @@ const LandingPage: React.FC = () => {
   const [errorStep, setErrorStep] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [quoteId, setQuoteId] = useState<string | null>(null);
+  const [ocrPreview, setOcrPreview] = useState<VisionOcrResult[]>([]);
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrError, setOcrError] = useState<string | null>(null);
+  const [gemResults, setGemResults] = useState<any[]>([]);
+  const [gemLoading, setGemLoading] = useState(false);
+  const [gemError, setGemError] = useState<string | null>(null);
 
   useEffect(() => {
-useEffect(() => {
   let mounted = true;
   (async () => {
     try {
@@ -122,8 +142,8 @@ useEffect(() => {
     if(files.length === 0) newErrors.files = 'At least one file required';
 
     for (const f of files) {
-      const ext = f.name.split('.').pop()?.toLowerCase();
-      if(!ext || !allowedExtensions.includes(ext as any)){
+      // enforce allowed MIME types and max size
+      if (!isAllowed(f)) {
         newErrors.files = 'Unsupported file type';
         break;
       }
@@ -151,22 +171,13 @@ useEffect(() => {
       formData.append('intendedUse', intendedUse);
       formData.append('sourceLanguage', sourceLanguage);
       formData.append('targetLanguage', targetLanguage);
-      files.forEach(f => formData.append('files[]', f));
-      const saveRes = await fetch('/api/save-quote', { method: 'POST', body: formData });
-      if(!saveRes.ok) {
-        let msg = 'Save failed';
-        try {
-          const err = await saveRes.json();
-          if (err?.error) msg = err.error;
-        } catch {}
-        throw new Error(msg);
-      }
-      const saveJson = await saveRes.json();
+      files.forEach(f => formData.append('files[]', f, f.name)); // append raw File objects
+      const saveJson = await saveQuote(formData);
       setQuoteId(saveJson.quote_id);
       // DO NOT EDIT OUTSIDE THIS BLOCK
 
       setStatusText('Analyzing with OCR…');
-      const ocrResults: OcrResult[] = [];
+      const ocrResults: MockOcrResult[] = [];
       for (const file of files) {
         // NOTE: replace second arg if you later pass the storage path
         const ocr = await runOcr(file.name, file.name);
@@ -194,18 +205,13 @@ useEffect(() => {
       }));
       setResults(combined);
       setScreen('review');
-} catch (err: any) {
-  console.error('Submit error:', err?.message || err);
-  const current = statusText.includes('OCR')
-    ? 'OCR'
-    : statusText.includes('Gemini')
-    ? 'Gemini'
-    : 'Upload';
-  setErrorStep(current);
-  setScreen('error');
-}
-
-      const current = statusText.includes('OCR') ? 'OCR' : statusText.includes('Gemini') ? 'Gemini' : 'Upload';
+    } catch (err: any) {
+      console.error('Submit error:', err?.message || err);
+      const current = statusText.includes('OCR')
+        ? 'OCR'
+        : statusText.includes('Gemini')
+        ? 'Gemini'
+        : 'Upload';
       setErrorStep(current);
       setScreen('error');
     }
@@ -233,34 +239,93 @@ useEffect(() => {
   // DO NOT EDIT OUTSIDE THIS BLOCK
   const sendEmail = async () => {
     try {
-      const res = await fetch('/api/send-quote', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: customerName,
-          email: customerEmail,
-          phone: customerPhone,
-          intendedUse,
-          sourceLanguage,
-          targetLanguage,
-          rate,
-          billablePages: billablePagesTotal,
-          total,
-          files: fileSummaries.map(f => ({ name: f.fileName, pages: f.pages }))
-        })
+      await sendQuote({
+        name: customerName,
+        email: customerEmail,
+        phone: customerPhone,
+        intendedUse,
+        sourceLanguage,
+        targetLanguage,
+        rate,
+        billablePages: billablePagesTotal,
+        total,
+        files: fileSummaries.map(f => ({ name: f.fileName, pages: f.pages }))
       });
-      if (res.ok) {
-        setScreen('result');
-      } else {
-        setErrorStep('Email');
-        setScreen('error');
-      }
-    } catch {
+      setScreen('result');
+    } catch (err: any) {
+      console.error('Send quote failed:', err?.message || err);
       setErrorStep('Email');
       setScreen('error');
     }
   };
   // DO NOT EDIT OUTSIDE THIS BLOCK
+
+  const runOcrPreview = async () => {
+    if (!quoteId) return;
+    setOcrLoading(true);
+    setOcrError(null);
+    try {
+      const filesPayload = await Promise.all(
+        fileSummaries.map(async (f) => {
+          const { data, error } = await supabase.storage
+            .from('orders')
+            .createSignedUrl(`${quoteId}/${f.fileName}`, 60);
+          if (error || !data?.signedUrl) {
+            throw new Error('Could not get file URL');
+          }
+          return { fileName: f.fileName, publicUrl: data.signedUrl };
+        })
+      );
+      const res = await runVisionOcr({ quote_id: quoteId, files: filesPayload });
+      setOcrPreview(res.results);
+    } catch (err: any) {
+      console.error('OCR failed:', err?.message || err);
+      setOcrError(err?.message || 'OCR failed');
+    } finally {
+      setOcrLoading(false);
+    }
+  };
+
+  const startGeminiPolling = (qid: string) => {
+    let tries = 0;
+    const max = 20;
+    const iv = setInterval(async () => {
+      tries++;
+      const { data } = await supabase
+        .from('quote_files')
+        .select(
+          'file_name, gem_page_complexity, gem_page_doc_types, gem_page_names, gem_page_languages, gem_languages_all, gem_status, gem_message'
+        )
+        .eq('quote_id', qid);
+      setGemResults(data || []);
+      const done = (data || []).every((r: any) => ['success', 'error'].includes(r.gem_status || ''));
+      if (done || tries >= max) {
+        clearInterval(iv);
+        setGemLoading(false);
+      }
+    }, 1500);
+  };
+
+  const runGemini = async () => {
+    if (!quoteId) return;
+    setGemLoading(true);
+    setGemError(null);
+    try {
+      await runGeminiAnalyze({ quote_id: quoteId });
+      startGeminiPolling(quoteId);
+    } catch (err: any) {
+      console.error('Gemini analysis failed:', err?.message || err);
+      console.error('Gemini analysis error object:', err);
+      setGemError(err?.message || 'Gemini analysis failed');
+      setGemLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (screen === 'review' && quoteId && !ocrLoading && ocrPreview.length === 0) {
+      runOcrPreview();
+    }
+  }, [screen, quoteId]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -285,114 +350,120 @@ useEffect(() => {
       </header>
 
       {/* Content */}
-      <main className="flex-1 p-4">
+      <main className="flex-1 p-4" id="instant-quote">
         {screen === 'form' && (
-          <form onSubmit={handleSubmit} className="max-w-2xl mx-auto space-y-4" aria-busy={loadingDropdowns ? 'true' : undefined}>
-            {Object.keys(errors).length > 0 && (
-              <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
-                Please correct the highlighted fields.
-              </div>
-            )}
-            {dropdownError && (
-              <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
-                {dropdownError}
-              </div>
-            )}
-            <div>
-              <label className="block font-medium" htmlFor="customerName">Name*</label>
-              <input id="customerName" type="text" value={customerName} onChange={e=>setCustomerName(e.target.value)} aria-invalid={errors.customerName ? 'true' : undefined} className="w-full border p-2 rounded" />
-            </div>
-            <div>
-              <label className="block font-medium" htmlFor="customerEmail">Email*</label>
-              <input id="customerEmail" type="email" value={customerEmail} onChange={e=>setCustomerEmail(e.target.value)} aria-invalid={errors.customerEmail ? 'true' : undefined} className="w-full border p-2 rounded" />
-            </div>
-            <div>
-              <label className="block font-medium" htmlFor="customerPhone">Phone</label>
-              <input id="customerPhone" type="tel" value={customerPhone} onChange={e=>setCustomerPhone(e.target.value)} className="w-full border p-2 rounded" />
-            </div>
-            <div>
-              <label className="block font-medium" htmlFor="intendedUse">Intended Use*</label>
-              <select id="intendedUse" value={intendedUse} onChange={e=>setIntendedUse(e.target.value)} aria-invalid={errors.intendedUse ? 'true' : undefined} className="w-full border p-2 rounded" disabled={loadingDropdowns}>
-                <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
-                {intendedUses.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-              </select>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block font-medium" htmlFor="sourceLanguage">Source Language*</label>
-                <select id="sourceLanguage" value={sourceLanguage} onChange={e=>setSourceLanguage(e.target.value)} aria-invalid={errors.sourceLanguage ? 'true' : undefined} className="w-full border p-2 rounded" disabled={loadingDropdowns}>
-                  <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
-                  {languages.map(l => <option key={l} value={l}>{l}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block font-medium" htmlFor="targetLanguage">Target Language*</label>
-                <select id="targetLanguage" value={targetLanguage} onChange={e=>setTargetLanguage(e.target.value)} aria-invalid={errors.targetLanguage ? 'true' : undefined} className="w-full border p-2 rounded" disabled={loadingDropdowns}>
-                  <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
-                  {languages.map(l => <option key={l} value={l}>{l}</option>)}
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="block font-medium" htmlFor="files">Upload Files*</label>
-              <input
-                ref={fileInputRef}
-                id="files"
-                type="file"
-                multiple
-                accept=".jpg,.jpeg,.png,.tiff,.doc,.docx,.pdf,.xls,.xlsx"
-                onChange={(e) => {
-                  const selected = Array.from(e.target.files || []);
-                  // de-dupe by name+size
-                  const byKey = new Map(files.map(f => [f.name + ':' + f.size, f]));
-                  for (const f of selected) byKey.set(f.name + ':' + f.size, f);
-                  setFiles(Array.from(byKey.values()));
-                }}
-                aria-invalid={errors.files ? 'true' : undefined}
-                className="w-full border p-2 rounded mt-1"
-              />
-              {files.length > 0 && (
-                <div className="mt-2 space-y-2">
-                  {files.map((f, idx) => (
-                    <div key={f.name + ':' + f.size} className="flex items-center justify-between rounded border p-2">
-                      <span className="text-sm truncate">{f.name}</span>
-                      <button
-                        type="button"
-                        className="text-xs underline"
-                        onClick={() => {
-                          const next = files.filter((_, i) => i !== idx);
-                          setFiles(next);
-                          if (next.length === 0 && fileInputRef.current) {
-                            fileInputRef.current.value = '';
-                          }
-                        }}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    className="text-xs underline mt-1"
-                    onClick={() => {
-                      setFiles([]);
-                      if (fileInputRef.current) fileInputRef.current.value = '';
-                    }}
-                  >
-                    Remove all
-                  </button>
+          <section className="card max-w-2xl mx-auto" data-ui="quote-form">
+            <h1 className="h1">Request a Certified Translation Quote</h1>
+            <p className="subtle">Fast. Accurate. IRCC & Alberta Government accepted.</p>
+            <form onSubmit={handleSubmit} aria-busy={loadingDropdowns ? 'true' : undefined}>
+              {Object.keys(errors).length > 0 && (
+                <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
+                  Please correct the highlighted fields.
                 </div>
               )}
-            </div>
-            <button
-              type="submit"
-              className="px-4 py-2 bg-indigo-600 text-white rounded disabled:opacity-60"
-              disabled={loadingDropdowns}
-              aria-disabled={loadingDropdowns ? 'true' : undefined}
-            >
-              {loadingDropdowns ? 'Loading options…' : 'Submit'}
-            </button>
-          </form>
+              {dropdownError && (
+                <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
+                  {dropdownError}
+                </div>
+              )}
+              <div className="form-grid">
+                <div className="field full">
+                  <label className="label" htmlFor="customerName">Name*</label>
+                  <input id="customerName" type="text" value={customerName} onChange={e=>setCustomerName(e.target.value)} aria-invalid={errors.customerName ? 'true' : undefined} className="input" />
+                </div>
+                <div className="field full">
+                  <label className="label" htmlFor="customerEmail">Email*</label>
+                  <input id="customerEmail" type="email" value={customerEmail} onChange={e=>setCustomerEmail(e.target.value)} aria-invalid={errors.customerEmail ? 'true' : undefined} className="input" />
+                </div>
+                <div className="field full">
+                  <label className="label" htmlFor="customerPhone">Phone</label>
+                  <input id="customerPhone" type="tel" value={customerPhone} onChange={e=>setCustomerPhone(e.target.value)} className="input" />
+                </div>
+                <div className="field full">
+                  <label className="label" htmlFor="intendedUse">Intended Use*</label>
+                  <select id="intendedUse" value={intendedUse} onChange={e=>setIntendedUse(e.target.value)} aria-invalid={errors.intendedUse ? 'true' : undefined} className="select" disabled={loadingDropdowns}>
+                    <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
+                    {intendedUses.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                  </select>
+                </div>
+                <div className="field">
+                  <label className="label" htmlFor="sourceLanguage">Source Language*</label>
+                  <select id="sourceLanguage" value={sourceLanguage} onChange={e=>setSourceLanguage(e.target.value)} aria-invalid={errors.sourceLanguage ? 'true' : undefined} className="select" disabled={loadingDropdowns}>
+                    <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
+                    {languages.map(l => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                </div>
+                <div className="field">
+                  <label className="label" htmlFor="targetLanguage">Target Language*</label>
+                  <select id="targetLanguage" value={targetLanguage} onChange={e=>setTargetLanguage(e.target.value)} aria-invalid={errors.targetLanguage ? 'true' : undefined} className="select" disabled={loadingDropdowns}>
+                    <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
+                    {languages.map(l => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                </div>
+                <div className="field full">
+                  <label className="upload full" htmlFor="files" aria-label="Upload files" role="button">
+                    <input
+                      ref={fileInputRef}
+                      id="files"
+                      type="file"
+                      multiple
+                      accept=".pdf,image/*,.docx,.xlsx" // allow images, pdf, docx, xlsx
+                      onChange={(e) => {
+                        const selected = Array.from(e.target.files || []);
+                        // de-dupe by name+size
+                        const byKey = new Map(files.map(f => [f.name + ':' + f.size, f]));
+                        for (const f of selected) byKey.set(f.name + ':' + f.size, f);
+                        setFiles(Array.from(byKey.values()));
+                      }}
+                      aria-invalid={errors.files ? 'true' : undefined}
+                    />
+                    <div className="title">Drag & drop files here</div>
+                    <div className="note">or click to browse — multiple files supported</div>
+                  </label>
+                  {files.length > 0 && (
+                    <div className="file-list">
+                      {files.map((f, idx) => (
+                        <div key={f.name + ':' + f.size} className="file-item flex items-center justify-between rounded border p-2">
+                          <span className="text-sm truncate">{f.name}</span>
+                          <button
+                            type="button"
+                            className="remove text-xs underline"
+                            onClick={() => {
+                              const next = files.filter((_, i) => i !== idx);
+                              setFiles(next);
+                              if (next.length === 0 && fileInputRef.current) {
+                                fileInputRef.current.value = '';
+                              }
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        className="remove text-xs underline mt-1"
+                        onClick={() => {
+                          setFiles([]);
+                          if (fileInputRef.current) fileInputRef.current.value = '';
+                        }}
+                      >
+                        Remove all
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <button
+                type="submit"
+                className="btn btn-primary btn-block"
+                disabled={loadingDropdowns}
+                aria-disabled={loadingDropdowns ? 'true' : undefined}
+              >
+                {loadingDropdowns ? 'Loading options…' : 'Get Instant Quote'}
+              </button>
+            </form>
+          </section>
         )}
 
         {screen === 'waiting' && (
@@ -411,38 +482,152 @@ useEffect(() => {
 
         {screen === 'review' && (
           <div className="space-y-6">
-            <table className="min-w-full text-sm border">
-              <thead>
-                <tr className="bg-gray-200 dark:bg-gray-700">
-                  <th className="p-2 border">Filename</th>
-                  <th className="p-2 border">Billable Pages (total)</th>
-                  <th className="p-2 border">Rate</th>
-                  <th className="p-2 border">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fileSummaries.map(f => (
-                  <tr key={f.fileName} className="border-t">
-                    <td className="p-2 border">{f.fileName}</td>
-                    <td className="p-2 border">{f.pages}</td>
-                    <td className="p-2 border">${rate.toFixed(2)}</td>
-                    <td className="p-2 border">${(f.pages * rate).toFixed(2)}</td>
+            <h1 className="h1">Review Your Translation Quote</h1>
+            <p className="subtle">Transparent pricing. No hidden fees.</p>
+            {quoteId && (
+              <div aria-label="Quote ID" style={{ marginBottom: 8 }}>
+                <strong>Quote ID:</strong> {quoteId}
+              </div>
+            )}
+            <div className="table-card">
+              <table className="table" role="table">
+                <thead>
+                  <tr>
+                    <th>Filename</th>
+                    <th>Billable Pages (total)</th>
+                    <th>Rate</th>
+                    <th>Total</th>
                   </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="font-semibold">
-                  <td className="p-2 border">Total Billable Pages</td>
-                  <td className="p-2 border">{billablePagesTotal}</td>
-                  <td className="p-2 border"></td>
-                  <td className="p-2 border">${total.toFixed(2)}</td>
-                </tr>
-              </tfoot>
-            </table>
-            <div className="flex space-x-2">
-              <button className="px-4 py-2 bg-gray-300 rounded" onClick={()=>setScreen('form')}>Back</button>
-              <button className="px-4 py-2 bg-indigo-600 text-white rounded" onClick={sendEmail}>Email your quote</button>
+                </thead>
+                <tbody>
+                  {fileSummaries.map(f => (
+                    <tr key={f.fileName}>
+                      <td>{f.fileName}</td>
+                      <td>{f.pages}</td>
+                      <td>${rate.toFixed(2)}</td>
+                      <td>${(f.pages * rate).toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="total-row">
+                    <td>Total Billable Pages</td>
+                    <td>{billablePagesTotal}</td>
+                    <td></td>
+                    <td className="total-amount right">${total.toFixed(2)}</td>
+                  </tr>
+                </tfoot>
+              </table>
             </div>
+            <div className="row">
+              <button className="btn btn-success" onClick={()=>setScreen('form')}>🔒 Accept & Pay Securely</button>
+              <button className="btn btn-outline" onClick={sendEmail}>Email this Quote</button>
+            </div>
+            <div className="trust" aria-hidden="true">
+              <span>✅ IRCC Accepted</span><span>✅ Alberta Govt Approved</span><span>✅ Secure Payments</span>
+            </div>
+            <details className="mt-4">
+              <summary className="cursor-pointer">OCR Results</summary>
+              <div className="mt-2 space-y-2">
+                {ocrError && <p className="help">{ocrError}</p>}
+                <table className="table" aria-label="OCR results">
+                  <thead>
+                    <tr>
+                      <th>File Name</th>
+                      <th>Pages</th>
+                      <th>Words/Page</th>
+                      <th>Language</th>
+                      <th>Total Words</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ocrPreview.length > 0 ? (
+                      ocrPreview.map((r) => (
+                        <tr key={r.fileName}>
+                          <td>{r.fileName}</td>
+                          <td>{r.pageCount}</td>
+                          <td>{r.wordsPerPage.join(', ')}</td>
+                          <td>{r.detectedLanguage}</td>
+                          <td>{r.totalWordCount}</td>
+                          <td>
+                            <span title={r.ocrMessage || ''}>
+                              {r.ocrStatus}
+                              {r.ocrMessage ? ` — ${r.ocrMessage}` : ''}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td>sample.pdf</td>
+                        <td>2</td>
+                        <td>120, 130</td>
+                        <td>en</td>
+                        <td>250</td>
+                        <td>success — Sample format only — awaiting OCR.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+                <button
+                  className="btn btn-outline"
+                  onClick={runGemini}
+                  disabled={gemLoading}
+                >
+                  {gemLoading ? 'Running…' : 'Run Gemini Analysis'}
+                </button>
+                {gemError && <p className="help">{gemError}</p>}
+                {gemResults.length > 0 && (
+                  <div className="mt-2 space-y-4">
+                    {gemResults.map((r: any) => {
+                      const pages = Object.keys(r.gem_page_complexity || {});
+                      return (
+                        <div key={r.file_name}>
+                          <p className="font-semibold">
+                            {r.file_name}
+                            {Array.isArray(r.gem_languages_all) && r.gem_languages_all.length > 0 && (
+                              <span className="ml-2 text-sm text-gray-600">
+                                Languages: {r.gem_languages_all.join(', ')}
+                              </span>
+                            )}
+                          </p>
+                          <table className="table mt-1" aria-label="Gemini page results">
+                            <thead>
+                              <tr>
+                                <th>Page</th>
+                                <th>Complexity</th>
+                                <th>Doc Type</th>
+                                <th>Names</th>
+                                <th>Languages</th>
+                                <th>Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {pages.map((p) => (
+                                <tr key={`${r.file_name}-${p}`}>
+                                  <td>{p}</td>
+                                  <td>{r.gem_page_complexity?.[p]}</td>
+                                  <td>{r.gem_page_doc_types?.[p] || ''}</td>
+                                  <td>{Array.isArray(r.gem_page_names?.[p]) ? r.gem_page_names[p].join(', ') : ''}</td>
+                                  <td>{Array.isArray(r.gem_page_languages?.[p]) ? r.gem_page_languages[p].join(', ') : ''}</td>
+                                  <td>
+                                    <span title={r.gem_message || ''}>
+                                      {r.gem_status}
+                                      {r.gem_message ? ` — ${r.gem_message}` : ''}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </details>
           </div>
         )}
         {screen === 'result' && (
@@ -461,3 +646,4 @@ useEffect(() => {
 };
 
 export default LandingPage;
+

@@ -2,7 +2,7 @@
 // File path: /netlify/functions/test-gemini.ts
 
 import { Handler } from '@netlify/functions';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenerativeAI } from '@google/generative-ai/server';
 import { ensureMethod } from './utils/ensureMethod';
 
 export const handler: Handler = async (event) => {
@@ -24,13 +24,12 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-    
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
     // Perform a minimal API call to test the key
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: 'Hello Gemini, this is a test.',
-    });
+    const response = await model.generateContent('Hello Gemini, this is a test.');
+    const text = response.response.text();
 
     return {
       statusCode: 200,
@@ -38,7 +37,7 @@ export const handler: Handler = async (event) => {
         success: true,
         data: {
           message: 'Successfully connected to Gemini API.',
-          response: response.text,
+          response: text,
         },
       }),
     };

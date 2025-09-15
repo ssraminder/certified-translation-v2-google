@@ -1,7 +1,7 @@
 // This is an example of a serverless function.
 // File path: /api/test-gemini.ts
 
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenerativeAI } from '@google/generative-ai/server';
 // import type { Request, Response } from 'express';
 // Fix: Use Node.js http types and define a custom interface for Express-like compatibility.
 import type { IncomingMessage, ServerResponse } from 'http';
@@ -26,19 +26,18 @@ export default async function handler(req: IncomingMessage, res: ApiResponse) {
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-    
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
     // Perform a minimal API call to test the key
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: 'Hello Gemini, this is a test.',
-    });
+    const response = await model.generateContent('Hello Gemini, this is a test.');
+    const text = response.response.text();
 
     return res.status(200).json({
       success: true,
       data: {
         message: 'Successfully connected to Gemini API.',
-        response: response.text,
+        response: text,
       },
     });
   } catch (error: any) {
