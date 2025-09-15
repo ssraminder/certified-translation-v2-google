@@ -4,12 +4,11 @@ export async function runGeminiAnalyze(payload: { quote_id: string }): Promise<v
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || `HTTP ${res.status}`);
+  }
   if (res.status !== 202) {
-    let msg = 'Gemini analysis failed';
-    try {
-      const err = await res.json();
-      if (err?.error) msg = err.error;
-    } catch {}
-    throw new Error(msg);
+    throw new Error(`Unexpected response status ${res.status}`);
   }
 }

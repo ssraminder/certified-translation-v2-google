@@ -315,6 +315,7 @@ const LandingPage: React.FC = () => {
       startGeminiPolling(quoteId);
     } catch (err: any) {
       console.error('Gemini analysis failed:', err?.message || err);
+      console.error('Gemini analysis error object:', err);
       setGemError(err?.message || 'Gemini analysis failed');
       setGemLoading(false);
     }

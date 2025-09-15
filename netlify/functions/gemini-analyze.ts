@@ -9,6 +9,39 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const VISION_API_KEY = process.env.API_KEY || '';
 
+function formatErrorMessage(err: any, fallback = 'Unknown error'): string {
+  try {
+    if (!err) return fallback;
+    if (typeof err === 'string') return err;
+    if (err instanceof Error && err.message) return err.message;
+    if (typeof err?.message === 'string') return err.message;
+    return JSON.stringify(err);
+  } catch {
+    return fallback;
+  }
+}
+
+async function safeUpdateStatus(
+  supabase: any,
+  id: string,
+  status: 'processing' | 'success' | 'error',
+  msg?: string
+) {
+  await supabase
+    .from('quote_files')
+    .update({
+      gem_status: status,
+      gem_message: (msg || null)?.slice(0, 400) || null,
+      ...(status === 'processing'
+        ? { gem_started_at: new Date().toISOString() }
+        : {}),
+      ...(status === 'success'
+        ? { gem_completed_at: new Date().toISOString() }
+        : {}),
+    })
+    .eq('id', id);
+}
+
 export const handler: Handler = async (event) => {
   try {
     if (event.httpMethod !== 'POST') {
@@ -63,16 +96,26 @@ async function queueGeminiForQuote(quoteId: string) {
   if (!files) return;
 
   for (const f of files) {
-    await supabase
-      .from('quote_files')
-      .update({
-        gem_status: 'processing',
-        gem_started_at: new Date().toISOString(),
-      })
-      .eq('id', f.id);
-
     try {
-      const pageTexts = await getPageTexts(supabase, f.storage_path, f.file_name);
+      await safeUpdateStatus(supabase, f.id, 'processing');
+
+      const pageTexts = await getPageTexts(
+        supabase,
+        f.storage_path,
+        f.file_name
+      ).catch((e: any) => {
+        throw new Error(`TEXT fetch failed: ${formatErrorMessage(e)}`);
+      });
+
+      const totalChars = pageTexts.reduce(
+        (acc, txt) => acc + (txt ? txt.length : 0),
+        0
+      );
+      console.log('Gemini text sizes', {
+        fileId: f.id,
+        pages: pageTexts.length,
+        totalChars,
+      });
 
       const pageComplexity: Record<string, string> = {};
       const pageDocTypes: Record<string, string> = {};
@@ -84,8 +127,22 @@ async function queueGeminiForQuote(quoteId: string) {
         const pageNum = String(i + 1);
         const text = pageTexts[i];
 
-        const complexity = await geminiComplexityForPage(model, text);
-        const cls = await geminiClassifyPage(model, text);
+        const complexity = await geminiComplexityForPage(model, text).catch(
+          (e: any) => {
+            throw new Error(
+              `GEMINI complexity failed on page ${pageNum}: ${formatErrorMessage(
+                e
+              )}`
+            );
+          }
+        );
+        const cls = await geminiClassifyPage(model, text).catch((e: any) => {
+          throw new Error(
+            `GEMINI classify failed on page ${pageNum}: ${formatErrorMessage(
+              e
+            )}`
+          );
+        });
 
         pageComplexity[pageNum] = complexity;
         pageDocTypes[pageNum] = cls.docType;
@@ -102,21 +159,25 @@ async function queueGeminiForQuote(quoteId: string) {
           gem_page_names: pageNames,
           gem_page_languages: pageLanguages,
           gem_languages_all: Array.from(langSet),
-          gem_status: 'success',
           gem_model: MODEL,
-          gem_completed_at: new Date().toISOString(),
-          gem_message: 'Gemini per-page analysis complete',
         })
         .eq('id', f.id);
+
+      await safeUpdateStatus(
+        supabase,
+        f.id,
+        'success',
+        'Gemini analysis complete'
+      );
     } catch (err: any) {
-      console.error('Gemini processing failed', err);
-      await supabase
-        .from('quote_files')
-        .update({
-          gem_status: 'error',
-          gem_message: err?.message || 'Gemini analysis failed',
-        })
-        .eq('id', f.id);
+      const msg = (err?.message || 'Gemini analysis failed').slice(0, 400);
+      console.error('Gemini worker error', {
+        fileId: f.id,
+        quoteId,
+        msg,
+        full: err,
+      });
+      await safeUpdateStatus(supabase, f.id, 'error', msg);
     }
   }
 }
@@ -128,19 +189,27 @@ async function getPageTexts(
 ): Promise<string[]> {
   const path = storagePath.replace(/^orders\//, '');
   const { data, error } = await supabase.storage.from('orders').download(path);
-  if (error || !data) throw new Error('File download failed');
+  if (error || !data) {
+    throw new Error(
+      `File download failed: ${formatErrorMessage(error) || 'no data returned'}`
+    );
+  }
   const buffer = Buffer.from(await data.arrayBuffer());
 
   if (fileName.toLowerCase().endsWith('.pdf')) {
     const pages: string[] = [];
-    await pdfParse(buffer, {
-      pagerender: async (pageData: any) => {
-        const content = await pageData.getTextContent();
-        const text = content.items.map((i: any) => i.str).join(' ');
-        pages.push(text);
-        return '';
-      },
-    });
+    try {
+      await pdfParse(buffer, {
+        pagerender: async (pageData: any) => {
+          const content = await pageData.getTextContent();
+          const text = content.items.map((i: any) => i.str).join(' ');
+          pages.push(text);
+          return '';
+        },
+      });
+    } catch (err: any) {
+      throw new Error(`PDF parse failed: ${formatErrorMessage(err)}`);
+    }
     return pages;
   }
 
@@ -165,7 +234,10 @@ async function getPageTexts(
   );
   const json = await resp.json();
   if (!resp.ok) {
-    throw new Error(json?.error?.message || 'Vision API error');
+    const errMsg = json?.error?.message
+      ? `Vision API error ${resp.status}: ${json.error.message}`
+      : `Vision API error ${resp.status}`;
+    throw new Error(errMsg);
   }
   const text = json?.responses?.[0]?.fullTextAnnotation?.text || '';
   return [text];

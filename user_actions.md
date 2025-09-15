@@ -168,3 +168,20 @@ curl -X POST https://<deploy-domain>/api/save-quote \
   -F "files[]=@path/to/file.pdf"
 ```
 - Verify row in `quote_submissions`, matching files in `quote_files`, and objects under `orders/{quote_id}/` in storage.
+## 2025-09-15 09:40 AM MDT — Gemini Error Surfacing (Client + Server)
+
+**ISO timestamp:** 2025-09-15T09:40:36-06:00
+
+**What changed**
+- Server now writes specific Gemini failure reasons into `quote_files.gem_message` (e.g., TEXT fetch failed, Gemini HTTP 403/400, GEMINI parse error).
+- Client logs both the short error message **and** the full error object in DevTools for debugging.
+- OCR and pricing code were not modified.
+
+**How to verify (no code required)**
+1. Click **Run Gemini Analysis** for a quote.
+2. If it fails, the table’s Status will show `error — <specific reason>`.
+3. Open DevTools Console to see the full error object.
+4. If it succeeds, expect: `gem_status=success`, `gem_message="Gemini analysis complete"` and the doc type, language, names, complexity fields populated.
+
+**Rollback**
+- No schema changes in this patch; you can revert this function/client diff without affecting OCR or payments.
