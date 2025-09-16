@@ -443,13 +443,28 @@ const LandingPage: React.FC = () => {
           return { fileName: f.fileName, publicUrl: data.signedUrl };
         })
       );
+
       const res = await runVisionOcr({ quote_id: quoteId, files: filesPayload });
-      setOcrPreview(res.results);
-      const processedFileNames = Array.isArray(res?.results)
-        ? res.results
-            .map((item: any) => item?.fileName)
-            .filter((name: string | undefined): name is string => Boolean(name))
-        : [];
+
+      // Normalize snake_case/camelCase fields
+      const normalized = (Array.isArray(res?.results) ? res.results : []).map((r: any) => {
+        const wordsPerPage = r.wordsPerPage ?? r.words_per_page ?? [];
+        const pageCount =
+          r.pageCount ?? r.page_count ?? (Array.isArray(wordsPerPage) ? wordsPerPage.length : 0);
+        return {
+          fileName: r.fileName ?? r.file_name ?? 'unknown',
+          pageCount,
+          wordsPerPage: Array.isArray(wordsPerPage) ? wordsPerPage : [],
+          detectedLanguage: r.detectedLanguage ?? r.language ?? 'undetermined',
+          totalWordCount: r.totalWordCount ?? r.total_words ?? 0,
+          ocrStatus: r.ocrStatus ?? r.status ?? '',
+          ocrMessage: r.ocrMessage ?? r.message ?? '',
+        };
+      }) as VisionOcrResult[];
+
+      setOcrPreview(normalized);
+
+      const processedFileNames = normalized.map(n => n.fileName).filter(Boolean);
       if (processedFileNames.length) {
         setGemLoading(true);
         setGemError(null);
@@ -458,7 +473,6 @@ const LandingPage: React.FC = () => {
           startGeminiPolling(quoteId);
         } catch (err: any) {
           console.error('Gemini analysis failed:', err?.message || err);
-          console.error('Gemini analysis error object:', err);
           setGemError(err?.message || 'Gemini analysis failed');
           setGemLoading(false);
         }
@@ -471,6 +485,44 @@ const LandingPage: React.FC = () => {
     }
   };
 
+  function normalizeGemRow(r: any) {
+    // Prefer map-of-pages; fallback to array-of-pages
+    const pageMap: Record<string, any> =
+      (r.gem_page_complexity && typeof r.gem_page_complexity === 'object')
+        ? r.gem_page_complexity
+        : Array.isArray(r.gem_pages)
+          ? Object.fromEntries(
+              r.gem_pages.map((p: any) => [
+                String(p.page ?? p.pageNumber ?? p.index ?? ''),
+                p,
+              ])
+            )
+          : {};
+
+    const docTypes = r.gem_page_doc_types ?? {};
+    const namesMap = r.gem_page_names ?? {};
+    const langsMap = r.gem_page_languages ?? {};
+
+    const per_page = Object.keys(pageMap)
+      .filter(k => k)
+      .map(k => {
+        const v = pageMap[k];
+        const complexity = typeof v === 'string' ? v : (v?.complexity ?? v?.score ?? '');
+        const docType = docTypes[k] ?? v?.docType ?? v?.doc_type ?? '';
+        const names = Array.isArray(namesMap[k]) ? namesMap[k] : (v?.names ?? []);
+        const languages = Array.isArray(langsMap[k]) ? langsMap[k] : (v?.languages ?? []);
+        return { page: k, complexity, docType, names, languages };
+      });
+
+    return {
+      file_name: r.file_name ?? r.fileName ?? 'unknown',
+      gem_status: r.gem_status ?? '',
+      gem_message: r.gem_message ?? '',
+      gem_languages_all: r.gem_languages_all ?? r.languages_all ?? [],
+      per_page,
+    };
+  }
+
   const startGeminiPolling = (qid: string) => {
     let tries = 0;
     const max = 20;
@@ -478,9 +530,11 @@ const LandingPage: React.FC = () => {
       tries++;
       try {
         const rows = await fetchQuoteFiles(qid);
-        setGemResults(rows || []);
-        const done = (rows || []).every((r: any) =>
-          ['success', 'error'].includes(r?.gem_status || '')
+        const normalized = (rows || []).map(normalizeGemRow);
+        setGemResults(normalized);
+
+        const done = normalized.every((r: any) =>
+          ['success', 'error'].includes((r.gem_status || '').toLowerCase())
         );
         if (done || tries >= max) {
           clearInterval(iv);
@@ -772,50 +826,51 @@ const LandingPage: React.FC = () => {
                 {gemError && <p className="help">{gemError}</p>}
                 {gemResults.length > 0 && (
                   <div className="mt-2 space-y-4">
-                    {gemResults.map((r: any) => {
-                      const pages = Object.keys(r.gem_page_complexity || {});
-                      return (
-                        <div key={r.file_name}>
-                          <p className="font-semibold">
-                            {r.file_name}
-                            {Array.isArray(r.gem_languages_all) && r.gem_languages_all.length > 0 && (
-                              <span className="ml-2 text-sm text-gray-600">
-                                Languages: {r.gem_languages_all.join(', ')}
-                              </span>
-                            )}
-                          </p>
-                          <table className="table mt-1" aria-label="Gemini page results">
-                            <thead>
-                              <tr>
-                                <th>Page</th>
-                                <th>Complexity</th>
-                                <th>Doc Type</th>
-                                <th>Names</th>
-                                <th>Languages</th>
-                                <th>Status</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {pages.map((p) => (
-                                <tr key={`${r.file_name}-${p}`}>
-                                  <td>{p}</td>
-                                  <td>{r.gem_page_complexity?.[p]}</td>
-                                  <td>{r.gem_page_doc_types?.[p] || ''}</td>
-                                  <td>{Array.isArray(r.gem_page_names?.[p]) ? r.gem_page_names[p].join(', ') : ''}</td>
-                                  <td>{Array.isArray(r.gem_page_languages?.[p]) ? r.gem_page_languages[p].join(', ') : ''}</td>
+                    {gemResults.map((r: any) => (
+                      <div key={r.file_name}>
+                        <p className="font-semibold">
+                          {r.file_name}
+                          {Array.isArray(r.gem_languages_all) && r.gem_languages_all.length > 0 && (
+                            <span className="ml-2 text-sm text-gray-600">
+                              Languages: {r.gem_languages_all.join(', ')}
+                            </span>
+                          )}
+                        </p>
+                        <table className="table mt-1" aria-label="Gemini page results">
+                          <thead>
+                            <tr>
+                              <th>Page</th>
+                              <th>Complexity</th>
+                              <th>Doc Type</th>
+                              <th>Names</th>
+                              <th>Languages</th>
+                              <th>Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Array.isArray(r.per_page) && r.per_page.length > 0 ? (
+                              r.per_page.map((p: any) => (
+                                <tr key={`${r.file_name}-${p.page}`}>
+                                  <td>{p.page}</td>
+                                  <td>{p.complexity || ''}</td>
+                                  <td>{p.docType || ''}</td>
+                                  <td>{Array.isArray(p.names) ? p.names.join(', ') : ''}</td>
+                                  <td>{Array.isArray(p.languages) ? p.languages.join(', ') : ''}</td>
                                   <td>
                                     <span title={r.gem_message || ''}>
-                                      {r.gem_status}
+                                      {r.gem_status || ''}
                                       {r.gem_message ? ` — ${r.gem_message}` : ''}
                                     </span>
                                   </td>
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      );
-                    })}
+                              ))
+                            ) : (
+                              <tr><td colSpan={6}>Per-page details not available yet.</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
