@@ -61,6 +61,7 @@ function uniqSorted(arr: (string | null | undefined)[] = []) {
   return Array.from(new Set(arr.filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b));
 }
 
+// ISO/code -> full language name (extend as needed)
 const LANG_NAME: Record<string, string> = {
   en: 'English', fr: 'French', de: 'German', ar: 'Arabic', es: 'Spanish',
   it: 'Italian', pt: 'Portuguese', zh: 'Chinese', ja: 'Japanese', ko: 'Korean',
@@ -467,26 +468,33 @@ const LandingPage: React.FC = () => {
           r.wordsPerPage ?? r.words_per_page ?? r.word_counts_per_page ??
           r.page_word_counts ?? r.wordsByPage ?? r.words_by_page ??
           r.page_words ?? r.page_text_word_counts ?? r.pageWords ?? [];
-        const wordsPerPage = Array.isArray(wordsPerPageRaw) ? wordsPerPageRaw : [];
-        const pageCount =
+
+        const wordsPerPage: number[] = Array.isArray(wordsPerPageRaw)
+          ? wordsPerPageRaw.map((n: any) => Number(n) || 0)
+          : [];
+
+        const pageCountRaw =
           r.pageCount ?? r.page_count ?? r.pages ?? r.num_pages ??
           (Array.isArray(wordsPerPage) ? wordsPerPage.length : 0);
-        const totalFromArray = Array.isArray(wordsPerPage)
-          ? wordsPerPage.reduce((s: number, n: any) => s + (Number(n) || 0), 0)
-          : 0;
-        const totalWordCount =
+        const pageCount = Number(pageCountRaw) || 0;
+
+        const totalFromArray = wordsPerPage.reduce((s: number, n: number) => s + (Number(n) || 0), 0);
+
+        const totalWordCountRaw =
           r.totalWordCount ?? r.total_words ?? r.word_count ?? r.total ?? totalFromArray;
+        const totalWordCount = Number(totalWordCountRaw) || totalFromArray || 0;
 
         return {
-          fileName: r.fileName ?? r.file_name ?? 'unknown',
-          pageCount: Number(pageCount) || 0,
-          wordsPerPage: Array.isArray(wordsPerPage) ? wordsPerPage.map((n:any)=>Number(n)||0) : [],
-          detectedLanguage: r.detectedLanguage ?? r.detected_language ?? r.language ?? r.lang ?? 'undetermined',
-          totalWordCount: Number(totalWordCount) || totalFromArray || 0,
-          ocrStatus: r.ocrStatus ?? r.status ?? '',
-          ocrMessage: r.ocrMessage ?? r.message ?? '',
+          fileName: r.fileName ?? r.file_name ?? "unknown",
+          pageCount,
+          wordsPerPage,
+          detectedLanguage:
+            r.detectedLanguage ?? r.detected_language ?? r.language ?? r.lang ?? "undetermined",
+          totalWordCount,
+          ocrStatus: r.ocrStatus ?? r.status ?? "",
+          ocrMessage: r.ocrMessage ?? r.message ?? "",
         };
-      });
+      }) as VisionOcrResult[];
 
       setOcrPreview(normalized);
 
@@ -511,6 +519,7 @@ const LandingPage: React.FC = () => {
     }
   };
 
+  // Robust Gemini normalizer (supports maps/arrays and per-page confidence)
   const normalizeGemRow = (r: any) => {
     let pageMap: Record<string, any> = {};
     const complexity = r.gem_page_complexity ?? r.page_complexity ?? r.per_page_complexity;
