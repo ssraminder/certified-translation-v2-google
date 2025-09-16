@@ -235,3 +235,5 @@ curl -X POST https://<deploy-domain>/api/save-quote \
 - Frontend now triggers OCR → poll → Gemini, then refreshes Supabase row.
 - Fixed client Supabase usage (sdk or headers).
 - Verified on scanned PDF: row updated with OCR metrics and Gemini fields.
+- 2025-09-16 06:39 PM MDT | 2025-09-16T18:39:24+00:00 — Implemented safe quote_id fallback; ensured button is clickable; added minimal z-index and disabled-logic fix; added diagnostics; no API/schema changes.
+- 2025-09-16 13:44 (MDT) | 2025-09-16T19:44:41Z — Disabled auto-analysis on file upload (no overlay on change); overlay now starts on Get Instant Quote; added resilient quote_id fallback in submit flow; preserved multi-file behavior; no API/schema/layout changes.

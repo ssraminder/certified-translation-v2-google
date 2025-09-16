@@ -1,5 +1,6 @@
 /* src/lib/quoteForm.ts */
 /* Resolve CS code (e.g., CS00515) from URL or DOM. */
+import { ensureQuoteId } from "./ensureQuoteId";
 export function resolveQuoteId(): string {
   const inPath = window.location.pathname.match(/CS\d{5,}/)?.[0];
   if (inPath) return inPath;
@@ -11,7 +12,7 @@ export function resolveQuoteId(): string {
   const fromDom = document.getElementById("quote-id")?.textContent?.trim();
   if (fromDom && /CS\d{5,}/.test(fromDom)) return fromDom.match(/CS\d{5,}/)![0];
 
-  throw new Error("Could not resolve quote_id on this page.");
+  return ensureQuoteId();
 }
 
 /* Post non-file form details to /api/save-quote using snake_case + quote_id */
