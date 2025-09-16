@@ -61,6 +61,21 @@ function uniqSorted(arr: (string | null | undefined)[] = []) {
   return Array.from(new Set(arr.filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b));
 }
 
+const LANG_NAME: Record<string, string> = {
+  en: 'English', fr: 'French', de: 'German', ar: 'Arabic', es: 'Spanish',
+  it: 'Italian', pt: 'Portuguese', zh: 'Chinese', ja: 'Japanese', ko: 'Korean',
+  ru: 'Russian', hi: 'Hindi', ur: 'Urdu', pa: 'Punjabi', fa: 'Persian',
+  tr: 'Turkish', pl: 'Polish', nl: 'Dutch', sv: 'Swedish', no: 'Norwegian',
+  da: 'Danish', fi: 'Finnish', el: 'Greek', he: 'Hebrew', cs: 'Czech',
+  sk: 'Slovak', ro: 'Romanian', bg: 'Bulgarian', uk: 'Ukrainian',
+  hr: 'Croatian', id: 'Indonesian', ms: 'Malay', th: 'Thai', vi: 'Vietnamese',
+};
+function toLanguageName(codeOrName?: string): string {
+  if (!codeOrName) return '';
+  const k = codeOrName.toLowerCase();
+  return LANG_NAME[k] || codeOrName.charAt(0).toUpperCase() + codeOrName.slice(1);
+}
+
 const LandingPage: React.FC = () => {
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
@@ -99,6 +114,7 @@ const LandingPage: React.FC = () => {
   const [gemLoading, setGemLoading] = useState(false);
   const [gemError, setGemError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const [phase, setPhase] = useState<'idle'|'submit'|'ocr'|'gemini'|'done'|'error'>('idle');
   const [message, setMessage] = useState("");
   const [percent, setPercent] = useState(0);
   const [eta, setEta] = useState<number | undefined>(undefined);
@@ -364,19 +380,23 @@ const LandingPage: React.FC = () => {
 
     if (isGetQuoteDisabled) return;
 
-    // Overlay now starts ONLY when button is clicked
+    // Overlay: start and keep it open through OCR/Gemini
     setOpen(true);
-    setMessage("Preparing your quote…");
+    setPhase('submit');
+    setMessage('Submitting…');
     setPercent(10);
     setEta(undefined);
 
     try {
       await submitQuoteForm(formRef.current, id);
-      setMessage("All set ✅");
-      setPercent(100);
-      setEta(0);
-    } finally {
-      setTimeout(() => setOpen(false), 900);
+      // Do NOT close overlay here; OCR/Gemini will advance and close it.
+    } catch (err: any) {
+      console.error(err);
+      setPhase('error');
+      setMessage(err?.message || 'Something went wrong');
+      setEta(undefined);
+      setPercent(0);
+      setOpen(false);
     }
   };
 
@@ -431,6 +451,13 @@ const LandingPage: React.FC = () => {
 
   const runOcrPreview = async () => {
     if (!quoteId) return;
+
+    setPhase('ocr');
+    setOpen(true); // ensure visible if entering review directly
+    setMessage('Running OCR…');
+    setPercent(40);
+    setEta(undefined);
+
     setOcrLoading(true);
     setOcrError(null);
     try {
@@ -443,14 +470,54 @@ const LandingPage: React.FC = () => {
           return { fileName: f.fileName, publicUrl: data.signedUrl };
         })
       );
+
       const res = await runVisionOcr({ quote_id: quoteId, files: filesPayload });
-      setOcrPreview(res.results);
-      const processedFileNames = Array.isArray(res?.results)
-        ? res.results
-            .map((item: any) => item?.fileName)
-            .filter((name: string | undefined): name is string => Boolean(name))
-        : [];
+
+      const normalized = (Array.isArray(res?.results) ? res.results : []).map((r: any) => {
+        const wordsPerPageRaw =
+          r.wordsPerPage ?? r.words_per_page ?? r.word_counts_per_page ??
+          r.page_word_counts ?? r.wordsByPage ?? r.words_by_page ??
+          r.page_words ?? r.page_text_word_counts ?? r.pageWords ?? [];
+        const wordsPerPage: number[] = Array.isArray(wordsPerPageRaw)
+          ? wordsPerPageRaw.map((n: any) => Number(n) || 0)
+          : [];
+
+        const pageCountRaw =
+          r.pageCount ?? r.page_count ?? r.pages ?? r.num_pages ??
+          (Array.isArray(wordsPerPage) ? wordsPerPage.length : 0);
+        const pageCount = Number(pageCountRaw) || 0;
+
+        const totalFromArray = wordsPerPage.reduce((s: number, n: number) => s + (Number(n) || 0), 0);
+        const totalWordCountRaw =
+          r.totalWordCount ?? r.total_words ?? r.word_count ?? r.total ?? totalFromArray;
+        const totalWordCount = Number(totalWordCountRaw) || totalFromArray || 0;
+
+        // Fallback: synthesize per-page words evenly when backend omits them
+        let filledPerPage = wordsPerPage;
+        if ((!filledPerPage || filledPerPage.length === 0) && pageCount > 0 && totalWordCount > 0) {
+          const avg = Math.round(totalWordCount / pageCount);
+          filledPerPage = Array.from({ length: pageCount }, () => avg);
+        }
+
+        return {
+          fileName: r.fileName ?? r.file_name ?? 'unknown',
+          pageCount,
+          wordsPerPage: filledPerPage,
+          detectedLanguage: r.detectedLanguage ?? r.detected_language ?? r.language ?? r.lang ?? 'undetermined',
+          totalWordCount,
+          ocrStatus: r.ocrStatus ?? r.status ?? '',
+          ocrMessage: r.ocrMessage ?? r.message ?? '',
+        } as VisionOcrResult;
+      });
+
+      setOcrPreview(normalized);
+      setPercent(60);
+
+      const processedFileNames = normalized.map(n => n.fileName).filter(Boolean);
       if (processedFileNames.length) {
+        setPhase('gemini');
+        setMessage('Analyzing with Gemini…');
+        setPercent(70);
         setGemLoading(true);
         setGemError(null);
         try {
@@ -458,14 +525,22 @@ const LandingPage: React.FC = () => {
           startGeminiPolling(quoteId);
         } catch (err: any) {
           console.error('Gemini analysis failed:', err?.message || err);
-          console.error('Gemini analysis error object:', err);
           setGemError(err?.message || 'Gemini analysis failed');
+          setPhase('error');
           setGemLoading(false);
+          setOpen(false);
         }
+      } else {
+        setMessage('All set ✅');
+        setPercent(100);
+        setPhase('done');
+        setOpen(false);
       }
     } catch (err: any) {
       console.error('OCR failed:', err?.message || err);
       setOcrError(err?.message || 'OCR failed');
+      setPhase('error');
+      setOpen(false);
     } finally {
       setOcrLoading(false);
     }
@@ -473,18 +548,73 @@ const LandingPage: React.FC = () => {
 
   const startGeminiPolling = (qid: string) => {
     let tries = 0;
-    const max = 20;
+    const max = 20; // ~30s total at 1500ms interval
     const iv = setInterval(async () => {
       tries++;
       try {
         const rows = await fetchQuoteFiles(qid);
-        setGemResults(rows || []);
-        const done = (rows || []).every((r: any) =>
-          ['success', 'error'].includes(r?.gem_status || '')
-        );
+
+        // Normalizer
+        const toMap = (v: any) => Array.isArray(v) ? Object.fromEntries(v.map((x: any, i: number) => [String(i + 1), x])) : v;
+        const normalizeGemRow = (r: any) => {
+          let pageMap: Record<string, any> = {};
+          const complexity = r.gem_page_complexity ?? r.page_complexity ?? r.per_page_complexity;
+          if (complexity && typeof complexity === 'object' && !Array.isArray(complexity)) {
+            pageMap = complexity as Record<string, any>;
+          } else if (Array.isArray(r.gem_pages)) {
+            pageMap = Object.fromEntries(
+              r.gem_pages.map((p: any, idx: number) => [String(p.page ?? p.pageNumber ?? p.index ?? (idx + 1)), p])
+            );
+          } else if (Array.isArray(complexity)) {
+            pageMap = Object.fromEntries(complexity.map((v: any, i: number) => [String(i + 1), { complexity: v }]));
+          }
+          const docTypesMap = toMap(r.gem_page_doc_types ?? r.page_doc_types ?? {});
+          const namesK      = toMap(r.gem_page_names ?? r.page_names ?? {});
+          const langsK      = toMap(r.gem_page_languages ?? r.page_languages ?? {});
+          const confK       = toMap(r.gem_page_confidence ?? r.page_confidence ?? r.per_page_confidence ?? {});
+
+          const per_page = Object.keys(pageMap)
+            .filter(Boolean)
+            .sort((a, b) => Number(a) - Number(b))
+            .map((k) => {
+              const v = pageMap[k];
+              const complexityVal = typeof v === 'string' ? v : v?.complexity ?? v?.score ?? '';
+              const docType = docTypesMap?.[k] ?? v?.docType ?? v?.doc_type ?? '';
+              const names = Array.isArray(namesK?.[k]) ? namesK[k] : v?.names ?? [];
+              const langs = Array.isArray(langsK?.[k]) ? langsK[k] : v?.languages ?? [];
+              let conf = confK?.[k] ?? v?.confidence ?? v?.confidence_score ?? v?.score_pct;
+              if (typeof conf === 'number' && conf <= 1) conf = Math.round(conf * 100);
+              if (typeof conf === 'number' && conf > 100) conf = Math.round(conf);
+              return { page: k, complexity: complexityVal, docType, names, languages: langs, confidence: conf };
+            });
+
+          return {
+            file_name: r.file_name ?? r.fileName ?? 'unknown',
+            gem_status: r.gem_status ?? r.status ?? '',
+            gem_message: r.gem_message ?? r.message ?? '',
+            gem_languages_all: r.gem_languages_all ?? r.languages_all ?? r.languages ?? [],
+            per_page,
+          };
+        };
+
+        const normalized = (rows || []).map(normalizeGemRow);
+        setGemResults(normalized);
+
+        // Progress creep while polling: 70 → 95
+        const creep = Math.min(25, tries * 2);
+        setPercent(70 + creep);
+        setMessage('Analyzing with Gemini…');
+
+        const status = (r: any) => String(r.gem_status || '').toLowerCase();
+        const done = normalized.every((r: any) => ['success', 'error', 'done', 'completed'].includes(status(r)));
+
         if (done || tries >= max) {
           clearInterval(iv);
           setGemLoading(false);
+          setMessage('All set ✅');
+          setPercent(100);
+          setPhase('done');
+          setOpen(false);
         }
       } catch (err: any) {
         console.error('Gemini polling failed:', err?.message || err);
@@ -492,6 +622,8 @@ const LandingPage: React.FC = () => {
           setGemError('Unable to retrieve Gemini status for this quote.');
           clearInterval(iv);
           setGemLoading(false);
+          setPhase('error');
+          setOpen(false);
         }
       }
     }, 1500);
@@ -501,6 +633,13 @@ const LandingPage: React.FC = () => {
     if (!quoteId) return;
     setGemLoading(true);
     setGemError(null);
+
+    setOpen(true);
+    setPhase('gemini');
+    setMessage('Analyzing with Gemini…');
+    setPercent(70);
+    setEta(undefined);
+
     try {
       await runGeminiAnalyze({
         quote_id: quoteId,
@@ -509,9 +648,10 @@ const LandingPage: React.FC = () => {
       startGeminiPolling(quoteId);
     } catch (err: any) {
       console.error('Gemini analysis failed:', err?.message || err);
-      console.error('Gemini analysis error object:', err);
       setGemError(err?.message || 'Gemini analysis failed');
       setGemLoading(false);
+      setPhase('error');
+      setOpen(false);
     }
   };
 
@@ -520,6 +660,37 @@ const LandingPage: React.FC = () => {
       runOcrPreview();
     }
   }, [screen, quoteId]);
+
+  const OCR_WORDS_PER_BILLABLE = 250;
+  const ocrRows = ocrPreview.flatMap((r) => {
+    const words = Array.isArray(r.wordsPerPage) ? r.wordsPerPage : [];
+    return words.map((w, idx) => ({
+      fileName: r.fileName,
+      page: idx + 1,
+      words: Number(w) || 0,
+      billablePages: Number(((Number(w) || 0) / OCR_WORDS_PER_BILLABLE).toFixed(2)),
+    }));
+  });
+
+  const gemRows = (Array.isArray(gemResults) ? gemResults : []).flatMap((row: any) => {
+    const file = row.file_name || 'unknown';
+    const topLangs = Array.isArray(row.gem_languages_all) ? row.gem_languages_all : [];
+    return Array.isArray(row.per_page) ? row.per_page.map((p: any) => {
+      const langs = Array.isArray(p.languages) && p.languages.length ? p.languages : topLangs;
+      const langFull = langs.map((x: string) => toLanguageName(x)).join(', ');
+      const names = Array.isArray(p.names) ? p.names.join(', ') : '';
+      const conf = typeof p.confidence === 'number' ? `${Math.round(p.confidence)}%` : '';
+      return {
+        fileName: file,
+        docType: p.docType || '',
+        page: p.page || '',
+        language: langFull,
+        complexity: p.complexity || '',
+        names,
+        confidence: conf,
+      };
+    }) : [];
+  });
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -675,151 +846,90 @@ const LandingPage: React.FC = () => {
         {screen === 'review' && (
           <div className="space-y-6">
             <h1 className="h1">Review Your Translation Quote</h1>
-            <p className="subtle">Transparent pricing. No hidden fees.</p>
             {quoteId && (
               <div aria-label="Quote ID" style={{ marginBottom: 8 }}>
                 <strong>Quote ID:</strong> {quoteId}
               </div>
             )}
-            <div className="table-card">
-              <table className="table" role="table">
-                <thead>
-                  <tr>
-                    <th>Filename</th>
-                    <th>Billable Pages (total)</th>
-                    <th>Rate</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fileSummaries.map(f => (
-                    <tr key={f.fileName}>
-                      <td>{f.fileName}</td>
-                      <td>{f.pages}</td>
-                      <td>${rate.toFixed(2)}</td>
-                      <td>${(f.pages * rate).toFixed(2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="total-row">
-                    <td>Total Billable Pages</td>
-                    <td>{billablePagesTotal}</td>
-                    <td></td>
-                    <td className="total-amount right">${total.toFixed(2)}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-            <div className="row">
-              <button className="btn btn-success" onClick={()=>setScreen('form')}>🔒 Accept & Pay Securely</button>
-              <button className="btn btn-outline" onClick={sendEmail}>Email this Quote</button>
-            </div>
-            <div className="trust" aria-hidden="true">
-              <span>✅ IRCC Accepted</span><span>✅ Alberta Govt Approved</span><span>✅ Secure Payments</span>
-            </div>
-            <details className="mt-4">
-              <summary className="cursor-pointer">OCR Results</summary>
-              <div className="mt-2 space-y-2">
-                {ocrError && <p className="help">{ocrError}</p>}
-                <table className="table" aria-label="OCR results">
+
+            {/* OCR Results: open, no accordion */}
+            <div>
+              <h2 className="h2 mb-2">OCR Results</h2>
+              {ocrError && <p className="help text-red-600">{ocrError}</p>}
+              <div className="table-card">
+                <table className="table" role="table" aria-label="OCR results (per page)">
                   <thead>
                     <tr>
-                      <th>File Name</th>
-                      <th>Pages</th>
-                      <th>Words/Page</th>
-                      <th>Language</th>
-                      <th>Total Words</th>
-                      <th>Status</th>
+                      <th>Filename</th>
+                      <th>Page No.</th>
+                      <th>Words</th>
+                      <th>Billable Pages</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {ocrPreview.length > 0 ? (
-                      ocrPreview.map((r) => (
-                        <tr key={r.fileName}>
+                    {ocrRows.length > 0 ? (
+                      ocrRows.map((r, i) => (
+                        <tr key={`${r.fileName}-${r.page}-${i}`}>
                           <td>{r.fileName}</td>
-                          <td>{r.pageCount}</td>
-                          <td>{r.wordsPerPage.join(', ')}</td>
-                          <td>{r.detectedLanguage}</td>
-                          <td>{r.totalWordCount}</td>
-                          <td>
-                            <span title={r.ocrMessage || ''}>
-                              {r.ocrStatus}
-                              {r.ocrMessage ? ` — ${r.ocrMessage}` : ''}
-                            </span>
-                          </td>
+                          <td>{r.page}</td>
+                          <td>{r.words}</td>
+                          <td>{r.billablePages.toFixed(2)}</td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td>sample.pdf</td>
-                        <td>2</td>
-                        <td>120, 130</td>
-                        <td>en</td>
-                        <td>250</td>
-                        <td>success — Sample format only — awaiting OCR.</td>
+                        <td colSpan={4}>No OCR details available yet.</td>
                       </tr>
                     )}
                   </tbody>
                 </table>
-                <button
-                  className="btn btn-outline"
-                  onClick={runGemini}
-                  disabled={gemLoading}
-                >
+              </div>
+            </div>
+
+            {/* Gemini Analysis: open, no accordion */}
+            <div>
+              <h2 className="h2 mb-2">Gemini Analysis</h2>
+              {gemError && <p className="help text-red-600">{gemError}</p>}
+              <div className="table-card">
+                <table className="table" role="table" aria-label="Gemini analysis (per page)">
+                  <thead>
+                    <tr>
+                      <th>Filename</th>
+                      <th>Document Type</th>
+                      <th>Page No.</th>
+                      <th>Language</th>
+                      <th>Complexity</th>
+                      <th>Names</th>
+                      <th>Confidence Score (in%)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {gemRows.length > 0 ? (
+                      gemRows.map((r, i) => (
+                        <tr key={`${r.fileName}-${r.page}-${i}`}>
+                          <td>{r.fileName}</td>
+                          <td>{r.docType}</td>
+                          <td>{r.page}</td>
+                          <td>{r.language}</td>
+                          <td>{r.complexity}</td>
+                          <td>{r.names}</td>
+                          <td>{r.confidence}</td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={7}>Per-page details not available yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-2">
+                <button className="btn btn-outline" onClick={runGemini} disabled={gemLoading}>
                   {gemLoading ? 'Running…' : 'Run Gemini Analysis'}
                 </button>
-                {gemError && <p className="help">{gemError}</p>}
-                {gemResults.length > 0 && (
-                  <div className="mt-2 space-y-4">
-                    {gemResults.map((r: any) => {
-                      const pages = Object.keys(r.gem_page_complexity || {});
-                      return (
-                        <div key={r.file_name}>
-                          <p className="font-semibold">
-                            {r.file_name}
-                            {Array.isArray(r.gem_languages_all) && r.gem_languages_all.length > 0 && (
-                              <span className="ml-2 text-sm text-gray-600">
-                                Languages: {r.gem_languages_all.join(', ')}
-                              </span>
-                            )}
-                          </p>
-                          <table className="table mt-1" aria-label="Gemini page results">
-                            <thead>
-                              <tr>
-                                <th>Page</th>
-                                <th>Complexity</th>
-                                <th>Doc Type</th>
-                                <th>Names</th>
-                                <th>Languages</th>
-                                <th>Status</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {pages.map((p) => (
-                                <tr key={`${r.file_name}-${p}`}>
-                                  <td>{p}</td>
-                                  <td>{r.gem_page_complexity?.[p]}</td>
-                                  <td>{r.gem_page_doc_types?.[p] || ''}</td>
-                                  <td>{Array.isArray(r.gem_page_names?.[p]) ? r.gem_page_names[p].join(', ') : ''}</td>
-                                  <td>{Array.isArray(r.gem_page_languages?.[p]) ? r.gem_page_languages[p].join(', ') : ''}</td>
-                                  <td>
-                                    <span title={r.gem_message || ''}>
-                                      {r.gem_status}
-                                      {r.gem_message ? ` — ${r.gem_message}` : ''}
-                                    </span>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
               </div>
-            </details>
+            </div>
           </div>
         )}
         {screen === 'result' && (
