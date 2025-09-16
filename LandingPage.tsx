@@ -10,6 +10,7 @@ import AnalysisOverlay from "./src/components/AnalysisOverlay";
 import { runOcrAndGemini } from "./src/lib/analysisPipeline";
 import { uploadViaSignedUrl, saveQuoteFromUI } from "./src/lib/quoteApi";
 import { resolveQuoteId } from "./src/lib/quoteForm";
+import { ensureQuoteId } from "./src/lib/ensureQuoteId"; // <- keep this
 import type { OcrResult as VisionOcrResult } from './types';
 
 type Screen = 'form' | 'waiting' | 'review' | 'result' | 'error';
@@ -37,7 +38,6 @@ const ALLOWED_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ]);
 
-// check file type against allow list (fallback to extension)
 const isAllowed = (file: File) =>
   ALLOWED_TYPES.has(file.type) ||
   (!file.type && /\.(pdf|docx|xlsx)$/i.test(file.name));
@@ -48,7 +48,7 @@ const guessContentType = (file: File) =>
     ? 'application/pdf'
     : 'application/octet-stream');
 
-const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25MB, matches server limit
+const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25MB
 
 function uniqSorted(arr: (string | null | undefined)[] = []) {
   return Array.from(new Set(arr.filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b));
@@ -63,6 +63,7 @@ const LandingPage: React.FC = () => {
   const [targetLanguage, setTargetLanguage] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
 
   const [languages, setLanguages] = useState<string[]>([]);
   const [intendedUses, setIntendedUses] = useState<string[]>([]);
@@ -78,11 +79,12 @@ const LandingPage: React.FC = () => {
 
   const [errors, setErrors] = useState<Record<string,string>>({});
   const [screen, setScreen] = useState<Screen>('form');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusText, setStatusText] = useState('');
   const [results, setResults] = useState<CombinedFile[]>([]);
   const [errorStep, setErrorStep] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [quoteId, setQuoteId] = useState<string | null>(null);
+  const [quoteId, setQuoteId] = useState<string>('');
   const [ocrPreview, setOcrPreview] = useState<VisionOcrResult[]>([]);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrError, setOcrError] = useState<string | null>(null);
@@ -94,6 +96,21 @@ const LandingPage: React.FC = () => {
   const [percent, setPercent] = useState(0);
   const [eta, setEta] = useState<number | undefined>(undefined);
 
+  // Initialize quoteId once
+  useEffect(() => {
+    try {
+      setQuoteId(ensureQuoteId());
+    } catch {
+      // noop
+    }
+  }, []);
+
+  // Helpful init log
+  useEffect(() => {
+    console.debug('quote-form:init', { quoteId, filesCount: files.length });
+  }, [quoteId, files]);
+
+  // Keep multi-file selection in sync
   useEffect(() => {
     const input = fileInputRef.current;
     if (!input) return;
@@ -136,57 +153,54 @@ const LandingPage: React.FC = () => {
   }
 
   useEffect(() => {
-  let mounted = true;
-  (async () => {
-    try {
-      setLoadingDropdowns(true);
-      setDropdownError(null);
+    let mounted = true;
+    (async () => {
+      try {
+        setLoadingDropdowns(true);
+        setDropdownError(null);
 
-      // DO NOT EDIT OUTSIDE THIS BLOCK
-      const { data: langRows, error: langErr } = await supabase
-        .from('languages')
-        .select('languagename, tier')
-        .order('languagename', { ascending: true });
-      if (langErr) throw langErr;
+        // DO NOT EDIT OUTSIDE THIS BLOCK
+        const { data: langRows, error: langErr } = await supabase
+          .from('languages')
+          .select('languagename, tier')
+          .order('languagename', { ascending: true });
+        if (langErr) throw langErr;
 
-      const { data: tierRows, error: tierErr } = await supabase
-        .from('tiers')
-        .select('tier, multiplier')
-        .order('tier', { ascending: true });
-      if (tierErr) throw tierErr;
+        const { data: tierRows, error: tierErr } = await supabase
+          .from('tiers')
+          .select('tier, multiplier')
+          .order('tier', { ascending: true });
+        if (tierErr) throw tierErr;
 
-      const { data: ctypeRows, error: ctypeErr } = await supabase
-        .from('certificationtypes')
-        .select('certtype, price')
-        .order('certtype', { ascending: true });
-      if (ctypeErr) throw ctypeErr;
+        const { data: ctypeRows, error: ctypeErr } = await supabase
+          .from('certificationtypes')
+          .select('certtype, price')
+          .order('certtype', { ascending: true });
+        if (ctypeErr) throw ctypeErr;
 
-      const { data: cmapRows, error: cmapErr } = await supabase
-        .from('certificationmap')
-        .select('intendeduse, certtype')
-        .order('intendeduse', { ascending: true });
-      if (cmapErr) throw cmapErr;
+        const { data: cmapRows, error: cmapErr } = await supabase
+          .from('certificationmap')
+          .select('intendeduse, certtype')
+          .order('intendeduse', { ascending: true });
+        if (cmapErr) throw cmapErr;
 
-      if (!mounted) return;
-      setLanguagesData((langRows ?? []).map(r => ({ name: r.languagename, tier: r.tier })));
-      setLanguages(uniqSorted((langRows ?? []).map(r => r.languagename)));
-      setTiers(tierRows ?? []);
-      setCertTypes((ctypeRows ?? []).map(r => ({ certType: r.certtype, price: r.price })));
-      setCertificationMap((cmapRows ?? []).map(r => ({ intendedUse: r.intendeduse, certType: r.certtype })));
-      setIntendedUses(uniqSorted((cmapRows ?? []).map(r => r.intendeduse)));
-      // DO NOT EDIT OUTSIDE THIS BLOCK
-    } catch (e: any) {
-      if (mounted) setDropdownError('Could not load form options. Please retry.');
-      console.error('Dropdown fetch failed:', e?.message || e);
-    } finally {
-      if (mounted) setLoadingDropdowns(false);
-    }
-  })();
-  return () => {
-    mounted = false;
-  };
-}, []);
-
+        if (!mounted) return;
+        setLanguagesData((langRows ?? []).map(r => ({ name: r.languagename, tier: r.tier })));
+        setLanguages(uniqSorted((langRows ?? []).map(r => r.languagename)));
+        setTiers(tierRows ?? []);
+        setCertTypes((ctypeRows ?? []).map(r => ({ certType: r.certtype, price: r.price })));
+        setCertificationMap((cmapRows ?? []).map(r => ({ intendedUse: r.intendeduse, certType: r.certtype })));
+        setIntendedUses(uniqSorted((cmapRows ?? []).map(r => r.intendeduse)));
+        // DO NOT EDIT OUTSIDE THIS BLOCK
+      } catch (e: any) {
+        if (mounted) setDropdownError('Could not load form options. Please retry.');
+        console.error('Dropdown fetch failed:', e?.message || e);
+      } finally {
+        if (mounted) setLoadingDropdowns(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
 
   const validate = (): boolean => {
     const newErrors: Record<string,string> = {};
@@ -198,22 +212,14 @@ const LandingPage: React.FC = () => {
     if(files.length === 0) newErrors.files = 'At least one file required';
 
     for (const f of files) {
-      // enforce allowed MIME types and max size
-      if (!isAllowed(f)) {
-        newErrors.files = 'Unsupported file type';
-        break;
-      }
-      if (f.size > MAX_FILE_SIZE_BYTES) {
-        newErrors.files = `File too large (max ${(MAX_FILE_SIZE_BYTES/1024/1024)|0}MB)`;
-        break;
-      }
+      if (!isAllowed(f)) { newErrors.files = 'Unsupported file type'; break; }
+      if (f.size > MAX_FILE_SIZE_BYTES) { newErrors.files = `File too large (max ${(MAX_FILE_SIZE_BYTES/1024/1024)|0}MB)`; break; }
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async () => {
     if(!validate()) return;
     if(files.length === 0) return;
     try{
@@ -231,10 +237,7 @@ const LandingPage: React.FC = () => {
       });
 
       const assignedQuoteId = saveJson?.quote_id;
-      if (!assignedQuoteId) {
-        throw new Error('Could not determine quote ID');
-      }
-
+      if (!assignedQuoteId) throw new Error('Could not determine quote ID');
       setQuoteId(assignedQuoteId);
 
       setStatusText('Uploading files…');
@@ -248,16 +251,9 @@ const LandingPage: React.FC = () => {
             upsert: true,
             contentType: guessContentType(file),
           });
+        if (uploadErr) throw new Error(`Upload failed for ${file.name} at orders/${storagePath}: ${uploadErr.message}`);
 
-        if (uploadErr) {
-          throw new Error(
-            `Upload failed for ${file.name} at orders/${storagePath}: ${uploadErr.message}`
-          );
-        }
-
-        const { data: publicData } = supabase.storage
-          .from('orders')
-          .getPublicUrl(storagePath);
+        const { data: publicData } = supabase.storage.from('orders').getPublicUrl(storagePath);
 
         await saveQuote({
           quote_id: assignedQuoteId,
@@ -271,7 +267,6 @@ const LandingPage: React.FC = () => {
       setStatusText('Analyzing with OCR…');
       const ocrResults: MockOcrResult[] = [];
       for (const file of files) {
-        // NOTE: replace second arg if you later pass the storage path
         const ocr = await runOcr(file.name, file.name);
         ocrResults.push(ocr);
       }
@@ -299,21 +294,20 @@ const LandingPage: React.FC = () => {
       setScreen('review');
     } catch (err: any) {
       console.error('Submit error:', err?.message || err);
-      const current = statusText.includes('OCR')
-        ? 'OCR'
-        : statusText.includes('Gemini')
-        ? 'Gemini'
+      const current = statusText.includes('OCR') ? 'OCR'
+        : statusText.includes('Gemini') ? 'Gemini'
         : 'Upload';
       setErrorStep(current);
       setScreen('error');
     }
   }
 
-  async function onQuoteFormSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const quote_id = resolveQuoteId();
+  async function submitQuoteForm(form: HTMLFormElement | null, providedId?: string) {
+    if (!form) return;
+    const quote_id = providedId || quoteId || ensureQuoteId();
+    if (!providedId) setQuoteId(quote_id);
 
-    const fd = new FormData(e.currentTarget);
+    const fd = new FormData(form);
     const name            = String(fd.get("name") || "");
     const email           = String(fd.get("email") || "");
     const phone           = String(fd.get("phone") || "");
@@ -321,8 +315,69 @@ const LandingPage: React.FC = () => {
     const source_language = String(fd.get("source_language") || "");
     const target_language = String(fd.get("target_language") || "");
 
-    await saveQuoteDetails({ quote_id, name, email, phone, intended_use, source_language, target_language });
-    await handleSubmit(e);
+    setIsSubmitting(true);
+    try {
+      await saveQuoteDetails({ quote_id, name, email, phone, intended_use, source_language, target_language });
+      await handleSubmit();
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  const fileCount = files.length;
+  const isGetQuoteDisabled =
+    !customerName.trim() ||
+    !customerEmail.trim() ||
+    !intendedUse ||
+    !sourceLanguage ||
+    !targetLanguage ||
+    fileCount === 0 ||
+    isSubmitting;
+
+  useEffect(() => {
+    if (isGetQuoteDisabled) {
+      console.debug('get-quote: disabled', {
+        name: !!customerName.trim(),
+        email: !!customerEmail.trim(),
+        intendedUse: !!intendedUse,
+        sourceLang: !!sourceLanguage,
+        targetLang: !!targetLanguage,
+        filesCount: fileCount,
+        isSubmitting,
+      });
+    }
+  }, [
+    isGetQuoteDisabled,
+    customerName,
+    customerEmail,
+    intendedUse,
+    sourceLanguage,
+    targetLanguage,
+    fileCount,
+    isSubmitting,
+  ]);
+
+  const handleGetInstantQuote = async (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    const id = quoteId || ensureQuoteId();
+    setQuoteId(id);
+
+    console.debug('get-quote: start', {
+      id,
+      hasFiles: fileCount > 0,
+      intendedUse,
+      sourceLang: sourceLanguage,
+      targetLang: targetLanguage,
+    });
+
+    if (isGetQuoteDisabled) return;
+    await submitQuoteForm(formRef.current, id);
+  };
+
+  async function onQuoteFormSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (isGetQuoteDisabled) return;
+    await submitQuoteForm(e.currentTarget);
   }
 
   // DO NOT EDIT OUTSIDE THIS BLOCK
@@ -378,9 +433,7 @@ const LandingPage: React.FC = () => {
           const { data, error } = await supabase.storage
             .from('orders')
             .createSignedUrl(`${quoteId}/${f.fileName}`, 60);
-          if (error || !data?.signedUrl) {
-            throw new Error('Could not get file URL');
-          }
+          if (error || !data?.signedUrl) throw new Error('Could not get file URL');
           return { fileName: f.fileName, publicUrl: data.signedUrl };
         })
       );
@@ -491,7 +544,7 @@ const LandingPage: React.FC = () => {
           <section className="card max-w-2xl mx-auto" data-ui="quote-form">
             <h1 className="h1">Request a Certified Translation Quote</h1>
             <p className="subtle">Fast. Accurate. IRCC & Alberta Government accepted.</p>
-            <form onSubmit={onQuoteFormSubmit} aria-busy={loadingDropdowns ? 'true' : undefined}>
+            <form ref={formRef} onSubmit={onQuoteFormSubmit} aria-busy={loadingDropdowns ? 'true' : undefined}>
               {Object.keys(errors).length > 0 && (
                 <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
                   Please correct the highlighted fields.
@@ -543,7 +596,7 @@ const LandingPage: React.FC = () => {
                       id="files"
                       type="file"
                       multiple
-                      accept=".pdf,image/*,.docx,.xlsx" // allow images, pdf, docx, xlsx
+                      accept=".pdf,image/*,.docx,.xlsx"
                       onChange={handleFileChange}
                       aria-invalid={errors.files ? 'true' : undefined}
                     />
@@ -585,10 +638,13 @@ const LandingPage: React.FC = () => {
                 </div>
               </div>
               <button
-                type="submit"
-                className="btn btn-primary btn-block"
-                disabled={loadingDropdowns}
-                aria-disabled={loadingDropdowns ? 'true' : undefined}
+                id="get-instant-quote"
+                data-testid="get-instant-quote"
+                type="button"
+                onClick={handleGetInstantQuote}
+                className="btn btn-primary btn-block relative z-10"
+                disabled={isGetQuoteDisabled}
+                aria-disabled={isGetQuoteDisabled ? 'true' : undefined}
               >
                 {loadingDropdowns ? 'Loading options…' : 'Get Instant Quote'}
               </button>
@@ -776,4 +832,3 @@ const LandingPage: React.FC = () => {
 };
 
 export default LandingPage;
-
