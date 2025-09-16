@@ -1,133 +1,90 @@
 import type { Handler } from "@netlify/functions";
 import { createClient } from "@supabase/supabase-js";
 
-type NullableString = string | null | undefined;
-
-type SaveQuoteBody = {
-  quote_id?: string;
-  name?: NullableString;
-  email?: NullableString;
-  phone?: NullableString;
-  intended_use?: NullableString;
-  source_language?: NullableString;
-  target_language?: NullableString;
-  file_name?: NullableString;
-  storage_path?: NullableString;
-  public_url?: NullableString;
-};
-
-function mustGet(name: string) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing server configuration: ${name}`);
-  }
-  return value;
-}
-
 const supabase = createClient(
-  mustGet("SUPABASE_URL"),
-  mustGet("SUPABASE_SERVICE_ROLE_KEY")
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-function normalize(value: NullableString) {
-  if (value === undefined) return undefined;
-  const trimmed = typeof value === "string" ? value.trim() : value;
-  return trimmed === "" ? null : trimmed;
-}
+type SaveQuoteBody = {
+  quote_id: string;
+  name?: string;
+  email?: string;
+  phone?: string;
+  intended_use?: string;
+  source_language?: string;
+  target_language?: string;
 
-async function ensureQuoteId(body: SaveQuoteBody) {
-  const incoming = normalize(body.quote_id);
-  if (incoming) return incoming;
-
-  const { data, error } = await supabase.rpc("get_next_cs_quote_id");
-  if (error || !data) {
-    throw new Error(
-      `Failed to allocate quote_id${error?.message ? `: ${error.message}` : ""}`
-    );
-  }
-  return String(data);
-}
+  file_name?: string;
+  storage_path?: string; // e.g., "orders/CS00515/JapanDL.pdf"
+  public_url?: string | null;
+};
 
 export const handler: Handler = async (event) => {
-  const started = Date.now();
-
   try {
-    if (event.httpMethod !== "POST") {
-      return { statusCode: 405, body: "Method Not Allowed" };
-    }
+    if (event.httpMethod !== "POST") return { statusCode: 405, body: "Method Not Allowed" };
+    const b = JSON.parse(event.body || "{}") as SaveQuoteBody;
+    if (!b.quote_id) return { statusCode: 400, body: "Missing quote_id" };
 
-    const body = event.body ? (JSON.parse(event.body) as SaveQuoteBody) : {};
-
-    const quoteId = await ensureQuoteId(body);
-
-    const submissionPayload: Record<string, unknown> = { quote_id: quoteId };
-
-    const name = normalize(body.name);
-    if (name !== undefined) submissionPayload.name = name;
-
-    const email = normalize(body.email);
-    if (email !== undefined) submissionPayload.email = email;
-
-    const phone = normalize(body.phone);
-    if (phone !== undefined) submissionPayload.phone = phone;
-
-    const intendedUse = normalize(body.intended_use);
-    if (intendedUse !== undefined) submissionPayload.intended_use = intendedUse;
-
-    const sourceLanguage = normalize(body.source_language);
-    if (sourceLanguage !== undefined) submissionPayload.source_language = sourceLanguage;
-
-    const targetLanguage = normalize(body.target_language);
-    if (targetLanguage !== undefined) submissionPayload.target_language = targetLanguage;
-
-    const hasSubmissionFields = Object.keys(submissionPayload).length > 1;
-
-    if (hasSubmissionFields) {
-      const { error } = await supabase
+    // --- quote_submissions manual UPSERT ---
+    {
+      const { data: existing, error: selErr } = await supabase
         .from("quote_submissions")
-        .upsert(submissionPayload, { onConflict: "quote_id" });
-      if (error) {
-        throw new Error(`DB upsert quote_submissions: ${error.message}`);
+        .select("quote_id")
+        .eq("quote_id", b.quote_id)
+        .maybeSingle();
+      if (selErr) throw new Error(`select quote_submissions: ${selErr.message}`);
+
+      const payload = {
+        quote_id: b.quote_id,
+        name: b.name ?? null,
+        email: b.email ?? null,
+        phone: b.phone ?? null,
+        intended_use: b.intended_use ?? null,
+        source_language: b.source_language ?? null,
+        target_language: b.target_language ?? null,
+      };
+
+      if (!existing) {
+        const { error } = await supabase.from("quote_submissions").insert(payload);
+        if (error) throw new Error(`insert quote_submissions: ${error.message}`);
+      } else {
+        const { error } = await supabase.from("quote_submissions").update(payload).eq("quote_id", b.quote_id);
+        if (error) throw new Error(`update quote_submissions: ${error.message}`);
       }
     }
 
-    const fileName = normalize(body.file_name);
-    const storagePath = normalize(body.storage_path);
-    const publicUrl = normalize(body.public_url);
+    // --- quote_files manual UPSERT (optional block) ---
+    if (b.file_name || b.storage_path || b.public_url !== undefined) {
+      const { data: f, error: selErr } = await supabase
+        .from("quote_files")
+        .select("quote_id,file_name")
+        .eq("quote_id", b.quote_id)
+        .eq("file_name", b.file_name ?? "")
+        .maybeSingle();
+      if (selErr) throw new Error(`select quote_files: ${selErr.message}`);
 
-    if (fileName || storagePath || publicUrl) {
-      if (!fileName) {
-        throw new Error("file_name is required when storing file metadata");
-      }
-
-      const filePayload: Record<string, unknown> = {
-        quote_id: quoteId,
-        file_name: fileName,
+      const payload = {
+        quote_id: b.quote_id,
+        file_name: b.file_name ?? null,
+        storage_path: b.storage_path ?? null,
+        public_url: b.public_url ?? null,
         gem_status: "pending",
         gem_message: "file saved",
       };
 
-      if (storagePath !== undefined) filePayload.storage_path = storagePath;
-      if (publicUrl !== undefined) filePayload.public_url = publicUrl;
-
-      const { error } = await supabase
-        .from("quote_files")
-        .upsert(filePayload, { onConflict: "quote_id,file_name" });
-      if (error) {
-        throw new Error(`DB upsert quote_files: ${error.message}`);
+      if (!f) {
+        const { error } = await supabase.from("quote_files").insert(payload);
+        if (error) throw new Error(`insert quote_files: ${error.message}`);
+      } else {
+        const { error } = await supabase.from("quote_files").update(payload)
+          .eq("quote_id", b.quote_id).eq("file_name", b.file_name ?? "");
+        if (error) throw new Error(`update quote_files: ${error.message}`);
       }
     }
 
-    return {
-      statusCode: 200,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ok: true, quote_id: quoteId, ms: Date.now() - started }),
-    };
-  } catch (error: any) {
-    return {
-      statusCode: 500,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ok: false, error: error?.message || "Unknown error" }),
-    };
+    return { statusCode: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ ok: true }) };
+  } catch (err: any) {
+    return { statusCode: 500, headers: { "content-type": "application/json" }, body: JSON.stringify({ ok: false, error: err?.message || String(err) }) };
   }
 };
