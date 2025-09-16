@@ -382,17 +382,22 @@ const LandingPage: React.FC = () => {
 
     // Overlay now starts ONLY when button is clicked
     setOpen(true);
-    setMessage("Preparing your quote…");
+    setMessage("Submitting…");
     setPercent(10);
     setEta(undefined);
 
     try {
       await submitQuoteForm(formRef.current, id);
-      setMessage("All set ✅");
+      setMessage("Running OCR…");
+      setPercent(30);
+      setEta(undefined);
+    } catch (err: any) {
+      console.error('Quote submission failed:', err?.message || err);
+      setMessage(err?.message || 'Quote submission failed');
       setPercent(100);
       setEta(0);
-    } finally {
-      setTimeout(() => setOpen(false), 900);
+      setOpen(false);
+      return;
     }
   };
 
@@ -449,12 +454,15 @@ const LandingPage: React.FC = () => {
     if (!quoteId) return;
     setOcrLoading(true);
     setOcrError(null);
+    setMessage("Running OCR…");
+    setPercent(30);
+    setEta(undefined);
     try {
       const filesPayload = await Promise.all(
         fileSummaries.map(async (f) => {
           const { data, error } = await supabase.storage
             .from('orders')
-            .createSignedUrl(`${quoteId}/${f.fileName}`, 60);
+            .createSignedUrl(`${quoteId}/${f.fileName}`, 600);
           if (error || !data?.signedUrl) throw new Error('Could not get file URL');
           return { fileName: f.fileName, publicUrl: data.signedUrl };
         })
@@ -462,8 +470,15 @@ const LandingPage: React.FC = () => {
 
       const res = await runVisionOcr({ quote_id: quoteId, files: filesPayload });
 
+      if (res?.status === 'error') {
+        throw new Error(res?.message || 'OCR failed');
+      }
+      if (!res || !Array.isArray(res.results) || res.results.length === 0) {
+        throw new Error(res?.message || 'OCR returned no results');
+      }
+
       // Normalize snake_case/camelCase variants and compute totals if missing
-      const normalized = (Array.isArray(res?.results) ? res.results : []).map((r: any) => {
+      const normalized = res.results.map((r: any) => {
         const wordsPerPageRaw =
           r.wordsPerPage ?? r.words_per_page ?? r.word_counts_per_page ??
           r.page_word_counts ?? r.wordsByPage ?? r.words_by_page ??
@@ -502,18 +517,36 @@ const LandingPage: React.FC = () => {
       if (processedFileNames.length) {
         setGemLoading(true);
         setGemError(null);
+        setMessage("Analyzing with Gemini…");
+        setPercent(60);
+        setEta(undefined);
         try {
           await runGeminiAnalyze({ quote_id: quoteId, fileNames: processedFileNames });
           startGeminiPolling(quoteId);
         } catch (err: any) {
           console.error('Gemini analysis failed:', err?.message || err);
           setGemError(err?.message || 'Gemini analysis failed');
+          setMessage(err?.message || 'Gemini analysis failed');
+          setPercent(100);
+          setEta(0);
+          setOpen(false);
           setGemLoading(false);
         }
+      } else {
+        setMessage('Analysis complete');
+        setPercent(100);
+        setEta(0);
+        setOpen(false);
+        setGemLoading(false);
       }
     } catch (err: any) {
       console.error('OCR failed:', err?.message || err);
       setOcrError(err?.message || 'OCR failed');
+      setMessage(err?.message || 'OCR failed');
+      setPercent(100);
+      setEta(0);
+      setOpen(false);
+      setGemLoading(false);
     } finally {
       setOcrLoading(false);
     }
@@ -579,25 +612,40 @@ const LandingPage: React.FC = () => {
   const startGeminiPolling = (qid: string) => {
     let tries = 0;
     const max = 20;
+    const terminal = new Set(['success', 'error', 'done', 'completed']);
     const iv = setInterval(async () => {
       tries++;
       try {
+        setMessage('Finalizing…');
+        setPercent(90);
+        setEta(undefined);
+
         const rows = await fetchQuoteFiles(qid);
         const normalized = (rows || []).map(normalizeGemRow);
         setGemResults(normalized);
 
         const done = normalized.every((r: any) => {
-          const s = String(r.gem_status || '').toLowerCase();
-          return s === 'success' || s === 'error' || s === 'done' || s === 'completed';
+          const flag = r.isDone ?? r.done ?? r.completed ?? r.finished;
+          if (typeof flag === 'boolean') return flag;
+          const s = String(r.gem_status ?? r.status ?? '').toLowerCase();
+          return terminal.has(s);
         });
         if (done || tries >= max) {
           clearInterval(iv);
           setGemLoading(false);
+          setMessage('Analysis complete');
+          setPercent(100);
+          setEta(0);
+          setOpen(false);
         }
       } catch (err: any) {
         console.error('Gemini polling failed:', err?.message || err);
         if (tries >= max) {
-          setGemError('Unable to retrieve Gemini status for this quote.');
+          setGemError(err?.message || 'Gemini analysis failed');
+          setMessage(err?.message || 'Gemini analysis failed');
+          setPercent(100);
+          setEta(0);
+          setOpen(false);
           clearInterval(iv);
           setGemLoading(false);
         }
