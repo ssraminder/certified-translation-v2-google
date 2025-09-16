@@ -35,7 +35,6 @@ const ALLOWED_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ]);
 
-// check file type against allow list (fallback to extension)
 const isAllowed = (file: File) =>
   ALLOWED_TYPES.has(file.type) ||
   (!file.type && /\.(pdf|docx|xlsx)$/i.test(file.name));
@@ -46,7 +45,7 @@ const guessContentType = (file: File) =>
     ? 'application/pdf'
     : 'application/octet-stream');
 
-const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25MB, matches server limit
+const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25MB
 
 // Feature flag: keep auto-analysis OFF
 const AUTO_ANALYZE_ON_UPLOAD = false;
@@ -104,6 +103,7 @@ const LandingPage: React.FC = () => {
   const [percent, setPercent] = useState(0);
   const [eta, setEta] = useState<number | undefined>(undefined);
 
+  // Initialize quoteId once
   useEffect(() => {
     try {
       setQuoteId(ensureQuoteId());
@@ -112,10 +112,12 @@ const LandingPage: React.FC = () => {
     }
   }, []);
 
+  // Helpful init log
   useEffect(() => {
     console.debug('quote-form:init', { quoteId, filesCount: files.length });
   }, [quoteId, files]);
 
+  // Keep multi-file selection in sync
   useEffect(() => {
     const input = fileInputRef.current;
     if (!input) return;
@@ -132,69 +134,64 @@ const LandingPage: React.FC = () => {
     };
   }, [screen]);
 
+  // Only merge files on selection — no uploads/overlay here
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(e.target.files ?? []);
     if (selected.length === 0) return;
     setFiles(prev => mergeSelectedFiles(prev, selected));
-
-    // No overlay, no uploads, no OCR/Gemini here.
     if (!AUTO_ANALYZE_ON_UPLOAD) return;
-
-    // (If you ever flip the flag true, you may reintroduce the prior pipeline.)
+    // (If you ever enable auto analysis again, reintroduce the pipeline here.)
   }
 
   useEffect(() => {
-  let mounted = true;
-  (async () => {
-    try {
-      setLoadingDropdowns(true);
-      setDropdownError(null);
+    let mounted = true;
+    (async () => {
+      try {
+        setLoadingDropdowns(true);
+        setDropdownError(null);
 
-      // DO NOT EDIT OUTSIDE THIS BLOCK
-      const { data: langRows, error: langErr } = await supabase
-        .from('languages')
-        .select('languagename, tier')
-        .order('languagename', { ascending: true });
-      if (langErr) throw langErr;
+        // DO NOT EDIT OUTSIDE THIS BLOCK
+        const { data: langRows, error: langErr } = await supabase
+          .from('languages')
+          .select('languagename, tier')
+          .order('languagename', { ascending: true });
+        if (langErr) throw langErr;
 
-      const { data: tierRows, error: tierErr } = await supabase
-        .from('tiers')
-        .select('tier, multiplier')
-        .order('tier', { ascending: true });
-      if (tierErr) throw tierErr;
+        const { data: tierRows, error: tierErr } = await supabase
+          .from('tiers')
+          .select('tier, multiplier')
+          .order('tier', { ascending: true });
+        if (tierErr) throw tierErr;
 
-      const { data: ctypeRows, error: ctypeErr } = await supabase
-        .from('certificationtypes')
-        .select('certtype, price')
-        .order('certtype', { ascending: true });
-      if (ctypeErr) throw ctypeErr;
+        const { data: ctypeRows, error: ctypeErr } = await supabase
+          .from('certificationtypes')
+          .select('certtype, price')
+          .order('certtype', { ascending: true });
+        if (ctypeErr) throw ctypeErr;
 
-      const { data: cmapRows, error: cmapErr } = await supabase
-        .from('certificationmap')
-        .select('intendeduse, certtype')
-        .order('intendeduse', { ascending: true });
-      if (cmapErr) throw cmapErr;
+        const { data: cmapRows, error: cmapErr } = await supabase
+          .from('certificationmap')
+          .select('intendeduse, certtype')
+          .order('intendeduse', { ascending: true });
+        if (cmapErr) throw cmapErr;
 
-      if (!mounted) return;
-      setLanguagesData((langRows ?? []).map(r => ({ name: r.languagename, tier: r.tier })));
-      setLanguages(uniqSorted((langRows ?? []).map(r => r.languagename)));
-      setTiers(tierRows ?? []);
-      setCertTypes((ctypeRows ?? []).map(r => ({ certType: r.certtype, price: r.price })));
-      setCertificationMap((cmapRows ?? []).map(r => ({ intendedUse: r.intendeduse, certType: r.certtype })));
-      setIntendedUses(uniqSorted((cmapRows ?? []).map(r => r.intendeduse)));
-      // DO NOT EDIT OUTSIDE THIS BLOCK
-    } catch (e: any) {
-      if (mounted) setDropdownError('Could not load form options. Please retry.');
-      console.error('Dropdown fetch failed:', e?.message || e);
-    } finally {
-      if (mounted) setLoadingDropdowns(false);
-    }
-  })();
-  return () => {
-    mounted = false;
-  };
-}, []);
-
+        if (!mounted) return;
+        setLanguagesData((langRows ?? []).map(r => ({ name: r.languagename, tier: r.tier })));
+        setLanguages(uniqSorted((langRows ?? []).map(r => r.languagename)));
+        setTiers(tierRows ?? []);
+        setCertTypes((ctypeRows ?? []).map(r => ({ certType: r.certtype, price: r.price })));
+        setCertificationMap((cmapRows ?? []).map(r => ({ intendedUse: r.intendeduse, certType: r.certtype })));
+        setIntendedUses(uniqSorted((cmapRows ?? []).map(r => r.intendeduse)));
+        // DO NOT EDIT OUTSIDE THIS BLOCK
+      } catch (e: any) {
+        if (mounted) setDropdownError('Could not load form options. Please retry.');
+        console.error('Dropdown fetch failed:', e?.message || e);
+      } finally {
+        if (mounted) setLoadingDropdowns(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
 
   const validate = (): boolean => {
     const newErrors: Record<string,string> = {};
@@ -206,15 +203,8 @@ const LandingPage: React.FC = () => {
     if(files.length === 0) newErrors.files = 'At least one file required';
 
     for (const f of files) {
-      // enforce allowed MIME types and max size
-      if (!isAllowed(f)) {
-        newErrors.files = 'Unsupported file type';
-        break;
-      }
-      if (f.size > MAX_FILE_SIZE_BYTES) {
-        newErrors.files = `File too large (max ${(MAX_FILE_SIZE_BYTES/1024/1024)|0}MB)`;
-        break;
-      }
+      if (!isAllowed(f)) { newErrors.files = 'Unsupported file type'; break; }
+      if (f.size > MAX_FILE_SIZE_BYTES) { newErrors.files = `File too large (max ${(MAX_FILE_SIZE_BYTES/1024/1024)|0}MB)`; break; }
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -237,11 +227,9 @@ const LandingPage: React.FC = () => {
         target_language: targetLanguage,
       });
 
+      // Robust fallback if API doesn't echo quote_id
       const assignedQuoteId = saveJson?.quote_id || quoteId || ensureQuoteId();
-      if (!assignedQuoteId) {
-        throw new Error('Could not determine quote ID');
-      }
-
+      if (!assignedQuoteId) throw new Error('Could not determine quote ID');
       setQuoteId(assignedQuoteId);
 
       setStatusText('Uploading files…');
@@ -255,16 +243,9 @@ const LandingPage: React.FC = () => {
             upsert: true,
             contentType: guessContentType(file),
           });
+        if (uploadErr) throw new Error(`Upload failed for ${file.name} at orders/${storagePath}: ${uploadErr.message}`);
 
-        if (uploadErr) {
-          throw new Error(
-            `Upload failed for ${file.name} at orders/${storagePath}: ${uploadErr.message}`
-          );
-        }
-
-        const { data: publicData } = supabase.storage
-          .from('orders')
-          .getPublicUrl(storagePath);
+        const { data: publicData } = supabase.storage.from('orders').getPublicUrl(storagePath);
 
         await saveQuote({
           quote_id: assignedQuoteId,
@@ -278,7 +259,6 @@ const LandingPage: React.FC = () => {
       setStatusText('Analyzing with OCR…');
       const ocrResults: MockOcrResult[] = [];
       for (const file of files) {
-        // NOTE: replace second arg if you later pass the storage path
         const ocr = await runOcr(file.name, file.name);
         ocrResults.push(ocr);
       }
@@ -306,10 +286,8 @@ const LandingPage: React.FC = () => {
       setScreen('review');
     } catch (err: any) {
       console.error('Submit error:', err?.message || err);
-      const current = statusText.includes('OCR')
-        ? 'OCR'
-        : statusText.includes('Gemini')
-        ? 'Gemini'
+      const current = statusText.includes('OCR') ? 'OCR'
+        : statusText.includes('Gemini') ? 'Gemini'
         : 'Upload';
       setErrorStep(current);
       setScreen('error');
@@ -404,9 +382,7 @@ const LandingPage: React.FC = () => {
 
   async function onQuoteFormSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (isGetQuoteDisabled) {
-      return;
-    }
+    if (isGetQuoteDisabled) return;
     await submitQuoteForm(e.currentTarget);
   }
 
@@ -463,9 +439,7 @@ const LandingPage: React.FC = () => {
           const { data, error } = await supabase.storage
             .from('orders')
             .createSignedUrl(`${quoteId}/${f.fileName}`, 60);
-          if (error || !data?.signedUrl) {
-            throw new Error('Could not get file URL');
-          }
+          if (error || !data?.signedUrl) throw new Error('Could not get file URL');
           return { fileName: f.fileName, publicUrl: data.signedUrl };
         })
       );
@@ -628,7 +602,7 @@ const LandingPage: React.FC = () => {
                       id="files"
                       type="file"
                       multiple
-                      accept=".pdf,image/*,.docx,.xlsx" // allow images, pdf, docx, xlsx
+                      accept=".pdf,image/*,.docx,.xlsx"
                       onChange={handleFileChange}
                       aria-invalid={errors.files ? 'true' : undefined}
                     />
@@ -864,4 +838,3 @@ const LandingPage: React.FC = () => {
 };
 
 export default LandingPage;
-
