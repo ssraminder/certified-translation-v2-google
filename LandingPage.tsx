@@ -5,7 +5,12 @@ import { runOcr, OcrResult as MockOcrResult } from './integrations/googleVision'
 import { analyzeWithGemini, GeminiAnalysis } from './integrations/gemini';
 import supabase from './src/lib/supabaseClient';
 import { saveQuote, sendQuote, runVisionOcr, runGeminiAnalyze, fetchQuoteFiles } from 'api';
-import { resolveQuoteId, saveQuoteDetails } from '@/lib/quoteForm';
+import { saveQuoteDetails } from "./src/lib/quoteForm";
+import AnalysisOverlay from "./src/components/AnalysisOverlay";
+import { runOcrAndGemini } from "./src/lib/analysisPipeline";
+import { uploadViaSignedUrl, saveQuoteFromUI } from "./src/lib/quoteApi";
+import { resolveQuoteId } from "./src/lib/quoteForm";
+import { ensureQuoteId } from "./src/lib/ensureQuoteId";
 import type { OcrResult as VisionOcrResult } from './types';
 
 type Screen = 'form' | 'waiting' | 'review' | 'result' | 'error';
@@ -59,6 +64,7 @@ const LandingPage: React.FC = () => {
   const [targetLanguage, setTargetLanguage] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
 
   const [languages, setLanguages] = useState<string[]>([]);
   const [intendedUses, setIntendedUses] = useState<string[]>([]);
@@ -74,17 +80,75 @@ const LandingPage: React.FC = () => {
 
   const [errors, setErrors] = useState<Record<string,string>>({});
   const [screen, setScreen] = useState<Screen>('form');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusText, setStatusText] = useState('');
   const [results, setResults] = useState<CombinedFile[]>([]);
   const [errorStep, setErrorStep] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [quoteId, setQuoteId] = useState<string | null>(null);
+  const [quoteId, setQuoteId] = useState<string>('');
   const [ocrPreview, setOcrPreview] = useState<VisionOcrResult[]>([]);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrError, setOcrError] = useState<string | null>(null);
   const [gemResults, setGemResults] = useState<any[]>([]);
   const [gemLoading, setGemLoading] = useState(false);
   const [gemError, setGemError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [message, setMessage] = useState("");
+  const [percent, setPercent] = useState(0);
+  const [eta, setEta] = useState<number | undefined>(undefined);
+
+  useEffect(() => {
+    try {
+      setQuoteId(ensureQuoteId());
+    } catch {
+      // noop
+    }
+  }, []);
+
+  useEffect(() => {
+    console.debug('quote-form:init', { quoteId, filesCount: files.length });
+  }, [quoteId, files]);
+
+  useEffect(() => {
+    const input = fileInputRef.current;
+    if (!input) return;
+    const updateFiles = (event: Event) => {
+      const target = event.target as HTMLInputElement | null;
+      const list = target?.files ?? input.files;
+      const selected = Array.from(list ?? []);
+      if (selected.length === 0) return;
+      setFiles(prev => {
+        const byKey = new Map(prev.map(f => [f.name + ':' + f.size, f]));
+        for (const f of selected) byKey.set(f.name + ':' + f.size, f);
+        return Array.from(byKey.values());
+      });
+    };
+    input.addEventListener('change', updateFiles);
+    return () => {
+      input.removeEventListener('change', updateFiles);
+    };
+  }, [screen]);
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] || null;
+    if (!file) return;
+    try {
+      const quote_id = resolveQuoteId();
+      setOpen(true); setMessage("Uploading file…"); setPercent(5); setEta(undefined);
+      await uploadViaSignedUrl(quote_id, file);
+      setMessage("Saving file details…"); setPercent(12);
+      await saveQuoteFromUI(quote_id, file, null);
+      await runOcrAndGemini(quote_id, file.name, u => {
+        setMessage(u.message); setPercent(u.percent); setEta(u.etaSeconds);
+      });
+      setMessage("All set ✅"); setPercent(100); setEta(0);
+    } catch (err: any) {
+      console.error(err);
+      setMessage(err?.message || "Something went wrong"); setEta(undefined); setPercent(0);
+    } finally {
+      setTimeout(() => setOpen(false), 900);
+    }
+  }
 
   useEffect(() => {
   let mounted = true;
@@ -163,8 +227,7 @@ const LandingPage: React.FC = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async () => {
     if(!validate()) return;
     if(files.length === 0) return;
     try{
@@ -260,11 +323,12 @@ const LandingPage: React.FC = () => {
     }
   }
 
-  async function onQuoteFormSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const quote_id = resolveQuoteId();
+  async function submitQuoteForm(form: HTMLFormElement | null, providedId?: string) {
+    if (!form) return;
+    const quote_id = providedId || quoteId || ensureQuoteId();
+    if (!providedId) setQuoteId(quote_id);
 
-    const fd = new FormData(e.currentTarget);
+    const fd = new FormData(form);
     const name            = String(fd.get("name") || "");
     const email           = String(fd.get("email") || "");
     const phone           = String(fd.get("phone") || "");
@@ -272,8 +336,74 @@ const LandingPage: React.FC = () => {
     const source_language = String(fd.get("source_language") || "");
     const target_language = String(fd.get("target_language") || "");
 
-    await saveQuoteDetails({ quote_id, name, email, phone, intended_use, source_language, target_language });
-    await handleSubmit(e);
+    setIsSubmitting(true);
+    try {
+      await saveQuoteDetails({ quote_id, name, email, phone, intended_use, source_language, target_language });
+      await handleSubmit();
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  const fileCount = files.length;
+  const isGetQuoteDisabled =
+    !customerName.trim() ||
+    !customerEmail.trim() ||
+    !intendedUse ||
+    !sourceLanguage ||
+    !targetLanguage ||
+    fileCount === 0 ||
+    isSubmitting;
+
+  useEffect(() => {
+    if (isGetQuoteDisabled) {
+      console.debug('get-quote: disabled', {
+        name: !!customerName.trim(),
+        email: !!customerEmail.trim(),
+        intendedUse: !!intendedUse,
+        sourceLang: !!sourceLanguage,
+        targetLang: !!targetLanguage,
+        filesCount: fileCount,
+        isSubmitting,
+      });
+    }
+  }, [
+    isGetQuoteDisabled,
+    customerName,
+    customerEmail,
+    intendedUse,
+    sourceLanguage,
+    targetLanguage,
+    fileCount,
+    isSubmitting,
+  ]);
+
+  const handleGetInstantQuote = async (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    const id = quoteId || ensureQuoteId();
+    setQuoteId(id);
+
+    console.debug('get-quote: start', {
+      id,
+      hasFiles: fileCount > 0,
+      intendedUse,
+      sourceLang: sourceLanguage,
+      targetLang: targetLanguage,
+    });
+
+    if (isGetQuoteDisabled) {
+      return;
+    }
+
+    await submitQuoteForm(formRef.current, id);
+  };
+
+  async function onQuoteFormSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (isGetQuoteDisabled) {
+      return;
+    }
+    await submitQuoteForm(e.currentTarget);
   }
 
   // DO NOT EDIT OUTSIDE THIS BLOCK
@@ -415,6 +545,7 @@ const LandingPage: React.FC = () => {
 
   return (
     <div className="min-h-screen flex flex-col">
+      <AnalysisOverlay open={open} message={message} percent={percent} etaSeconds={eta} />
       {/* Header */}
       <header className="sticky top-0 bg-white dark:bg-[#0C1E40] shadow flex items-center justify-between px-4 py-2" role="navigation" aria-label="main">
         <a href="/" className="flex items-center">
@@ -441,7 +572,7 @@ const LandingPage: React.FC = () => {
           <section className="card max-w-2xl mx-auto" data-ui="quote-form">
             <h1 className="h1">Request a Certified Translation Quote</h1>
             <p className="subtle">Fast. Accurate. IRCC & Alberta Government accepted.</p>
-            <form onSubmit={onQuoteFormSubmit} aria-busy={loadingDropdowns ? 'true' : undefined}>
+            <form ref={formRef} onSubmit={onQuoteFormSubmit} aria-busy={loadingDropdowns ? 'true' : undefined}>
               {Object.keys(errors).length > 0 && (
                 <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
                   Please correct the highlighted fields.
@@ -494,13 +625,7 @@ const LandingPage: React.FC = () => {
                       type="file"
                       multiple
                       accept=".pdf,image/*,.docx,.xlsx" // allow images, pdf, docx, xlsx
-                      onChange={(e) => {
-                        const selected = Array.from(e.target.files || []);
-                        // de-dupe by name+size
-                        const byKey = new Map(files.map(f => [f.name + ':' + f.size, f]));
-                        for (const f of selected) byKey.set(f.name + ':' + f.size, f);
-                        setFiles(Array.from(byKey.values()));
-                      }}
+                      onChange={handleFileChange}
                       aria-invalid={errors.files ? 'true' : undefined}
                     />
                     <div className="title">Drag & drop files here</div>
@@ -541,10 +666,13 @@ const LandingPage: React.FC = () => {
                 </div>
               </div>
               <button
-                type="submit"
-                className="btn btn-primary btn-block"
-                disabled={loadingDropdowns}
-                aria-disabled={loadingDropdowns ? 'true' : undefined}
+                id="get-instant-quote"
+                data-testid="get-instant-quote"
+                type="button"
+                onClick={handleGetInstantQuote}
+                className="btn btn-primary btn-block relative z-10"
+                disabled={isGetQuoteDisabled}
+                aria-disabled={isGetQuoteDisabled ? 'true' : undefined}
               >
                 {loadingDropdowns ? 'Loading options…' : 'Get Instant Quote'}
               </button>
