@@ -1,0 +1,86 @@
+:root{
+  --cethos-blue:#1C2E4A;        /* primary */
+  --cethos-orange:#FF6B35;      /* accent */
+  --cethos-gray-50:#F5F6FA;     /* light bg */
+  --cethos-text:#333333;        /* body text */
+  --cethos-success:#2ECC71;     /* primary CTA success */
+  --radius-2:8px;
+  --shadow-1:0 6px 16px rgba(0,0,0,.08);
+  --shadow-press:0 3px 10px rgba(0,0,0,.12) inset;
+  --focus:0 0 0 3px rgba(28,46,74,.18);
+  --font:"Inter",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+}
+
+body { font-family:var(--font); color:var(--cethos-text); background:var(--cethos-gray-50); }
+
+.card{background:#fff;border-radius:var(--radius-2);box-shadow:var(--shadow-1);padding:24px;}
+.h1{font-size:1.35rem;font-weight:700;color:var(--cethos-blue);margin:0 0 4px;}
+.subtle{color:#555;margin:0 0 18px;}
+.row{display:flex;gap:16px;flex-wrap:wrap;}
+.field{width:100%;}
+.label{font-weight:600;margin:8px 0 6px;display:block;}
+.input,.select,.textarea{
+  width:100%;padding:12px 14px;border:1px solid #D7DCE3;border-radius:10px;background:#fff;
+  transition:border-color .15s, box-shadow .15s;
+}
+.input:focus,.select:focus,.textarea:focus{outline:none;border-color:var(--cethos-blue);box-shadow:var(--focus);}
+.help{font-size:.85rem;color:#666;margin-top:6px;}
+.btn{appearance:none;border:0;border-radius:12px;padding:14px 18px;font-weight:700;cursor:pointer;transition:transform .05s, box-shadow .15s;}
+.btn:active{transform:translateY(1px);}
+.btn-primary{background:var(--cethos-blue);color:#fff;}
+.btn-primary:hover{background:var(--cethos-orange);}
+.btn-success{background:var(--cethos-success);color:#fff;}
+.btn-outline{background:#fff;color:var(--cethos-blue);border:2px solid var(--cethos-blue);}
+.btn-block{width:100%;}
+.badge{display:inline-flex;gap:8px;align-items:center;color:#1b5e20;background:#e9f7ef;border-radius:999px;padding:8px 12px;font-weight:600;}
+
+.upload{
+  border:2px dashed #CCD3DB;border-radius:14px;background:#fff;padding:18px;text-align:center;
+}
+.upload:hover{border-color:var(--cethos-blue);background:#fafcff;}
+.upload input[type="file"]{display:none;}
+.upload .title{font-weight:600;margin-bottom:6px;}
+.upload .note{color:#666;font-size:.9rem;}
+
+.table-card{background:#fff;border-radius:var(--radius-2);box-shadow:var(--shadow-1);overflow:hidden;}
+.table{width:100%;border-collapse:collapse;}
+.table thead th{background:var(--cethos-blue);color:#fff;padding:12px 14px;text-align:left;}
+.table tbody td{padding:12px 14px;border-bottom:1px solid #EEF1F5;}
+.table tbody tr:nth-child(odd){background:#FCFDFE;}
+.table tfoot td{padding:14px;font-weight:800;}
+.table .right{text-align:right;}
+.total-row{background:#FFF7F2;}
+.total-amount{color:var(--cethos-blue);}
+
+.trust{display:flex;gap:14px;flex-wrap:wrap;margin-top:14px;color:#2f4f4f;font-size:.95rem;}
+.lock{margin-right:6px;}
+
+@media (min-width:680px){
+  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .form-grid .full{grid-column:1 / -1;}
+}
+
+/* ===== Instant Quote – Mobile polish ===== */
+#instant-quote{--iq-gap:16px;--iq-radius:12px;}
+#instant-quote .field{margin-bottom:var(--iq-gap);}
+#instant-quote .input,#instant-quote .select{width:100%;padding:12px 14px;min-height:44px;}
+
+/* Dropzone */
+#instant-quote .upload{position:relative;min-height:150px;border:2px dashed #CCD3DB;border-radius:var(--iq-radius);background:#fff;display:flex;flex-direction:column;justify-content:center;cursor:pointer;}
+#instant-quote .upload input[type="file"]{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer;}
+#instant-quote .upload:focus-within,#instant-quote .upload.dragover{border-color:var(--cethos-blue);background:#fafcff;}
+
+/* File list */
+#instant-quote .file-list{margin-top:10px;}
+#instant-quote .file-list .file-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;margin-top:8px;border:1px solid rgba(0,0,0,.08);border-radius:10px;background:#fff;}
+#instant-quote .file-list .remove{font-weight:600;}
+
+/* Buttons */
+#instant-quote .row{justify-content:center;}
+#instant-quote .btn{min-height:44px;text-align:center;}
+#instant-quote .btn-block{display:inline-block;width:auto;}
+
+@media (max-width:430px){
+  #instant-quote .row{flex-direction:column;}
+  #instant-quote .btn{display:block;width:calc(100% - 32px);margin:12px auto 0;}
+}
