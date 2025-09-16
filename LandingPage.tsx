@@ -61,6 +61,22 @@ function uniqSorted(arr: (string | null | undefined)[] = []) {
   return Array.from(new Set(arr.filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b));
 }
 
+// ISO/code -> full language name (extend as needed)
+const LANG_NAME: Record<string, string> = {
+  en: 'English', fr: 'French', de: 'German', ar: 'Arabic', es: 'Spanish',
+  it: 'Italian', pt: 'Portuguese', zh: 'Chinese', ja: 'Japanese', ko: 'Korean',
+  ru: 'Russian', hi: 'Hindi', ur: 'Urdu', pa: 'Punjabi', fa: 'Persian',
+  tr: 'Turkish', pl: 'Polish', nl: 'Dutch', sv: 'Swedish', no: 'Norwegian',
+  da: 'Danish', fi: 'Finnish', el: 'Greek', he: 'Hebrew', cs: 'Czech',
+  sk: 'Slovak', ro: 'Romanian', bg: 'Bulgarian', uk: 'Ukrainian',
+  hr: 'Croatian', id: 'Indonesian', ms: 'Malay', th: 'Thai', vi: 'Vietnamese',
+};
+function toLanguageName(codeOrName?: string): string {
+  if (!codeOrName) return '';
+  const k = codeOrName.toLowerCase();
+  return LANG_NAME[k] || codeOrName.charAt(0).toUpperCase() + codeOrName.slice(1);
+}
+
 const LandingPage: React.FC = () => {
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
@@ -445,40 +461,40 @@ const LandingPage: React.FC = () => {
       );
 
       const res = await runVisionOcr({ quote_id: quoteId, files: filesPayload });
-// Normalize snake_case/camelCase variants and compute totals if missing
-const normalized = (Array.isArray(res?.results) ? res.results : []).map((r: any) => {
-  const wordsPerPageRaw =
-    r.wordsPerPage ?? r.words_per_page ?? r.word_counts_per_page ??
-    r.page_word_counts ?? r.wordsByPage ?? r.words_by_page ??
-    r.page_words ?? r.page_text_word_counts ?? r.pageWords ?? [];
 
-  const wordsPerPage: number[] = Array.isArray(wordsPerPageRaw)
-    ? wordsPerPageRaw.map((n: any) => Number(n) || 0)
-    : [];
+      // Normalize snake_case/camelCase variants and compute totals if missing
+      const normalized = (Array.isArray(res?.results) ? res.results : []).map((r: any) => {
+        const wordsPerPageRaw =
+          r.wordsPerPage ?? r.words_per_page ?? r.word_counts_per_page ??
+          r.page_word_counts ?? r.wordsByPage ?? r.words_by_page ??
+          r.page_words ?? r.page_text_word_counts ?? r.pageWords ?? [];
 
-  const pageCountRaw =
-    r.pageCount ?? r.page_count ?? r.pages ?? r.num_pages ??
-    (Array.isArray(wordsPerPage) ? wordsPerPage.length : 0);
-  const pageCount = Number(pageCountRaw) || 0;
+        const wordsPerPage: number[] = Array.isArray(wordsPerPageRaw)
+          ? wordsPerPageRaw.map((n: any) => Number(n) || 0)
+          : [];
 
-  const totalFromArray = wordsPerPage.reduce((s: number, n: number) => s + (Number(n) || 0), 0);
+        const pageCountRaw =
+          r.pageCount ?? r.page_count ?? r.pages ?? r.num_pages ??
+          (Array.isArray(wordsPerPage) ? wordsPerPage.length : 0);
+        const pageCount = Number(pageCountRaw) || 0;
 
-  const totalWordCountRaw =
-    r.totalWordCount ?? r.total_words ?? r.word_count ?? r.total ?? totalFromArray;
-  const totalWordCount = Number(totalWordCountRaw) || totalFromArray || 0;
+        const totalFromArray = wordsPerPage.reduce((s: number, n: number) => s + (Number(n) || 0), 0);
 
-  return {
-    fileName: r.fileName ?? r.file_name ?? "unknown",
-    pageCount,
-    wordsPerPage,
-    detectedLanguage:
-      r.detectedLanguage ?? r.detected_language ?? r.language ?? r.lang ?? "undetermined",
-    totalWordCount,
-    ocrStatus: r.ocrStatus ?? r.status ?? "",
-    ocrMessage: r.ocrMessage ?? r.message ?? "",
-  };
-}) as VisionOcrResult[];
+        const totalWordCountRaw =
+          r.totalWordCount ?? r.total_words ?? r.word_count ?? r.total ?? totalFromArray;
+        const totalWordCount = Number(totalWordCountRaw) || totalFromArray || 0;
 
+        return {
+          fileName: r.fileName ?? r.file_name ?? "unknown",
+          pageCount,
+          wordsPerPage,
+          detectedLanguage:
+            r.detectedLanguage ?? r.detected_language ?? r.language ?? r.lang ?? "undetermined",
+          totalWordCount,
+          ocrStatus: r.ocrStatus ?? r.status ?? "",
+          ocrMessage: r.ocrMessage ?? r.message ?? "",
+        };
+      }) as VisionOcrResult[];
 
       setOcrPreview(normalized);
 
@@ -503,80 +519,62 @@ const normalized = (Array.isArray(res?.results) ? res.results : []).map((r: any)
     }
   };
 
- function normalizeGemRow(r: any) {
-  // 1) Build a page map from several possible shapes (map, array-of-objects, parallel arrays)
-  const complexityAny =
-    r.gem_page_complexity ?? r.page_complexity ?? r.per_page_complexity;
+  // Robust Gemini normalizer (supports maps/arrays and per-page confidence)
+  const normalizeGemRow = (r: any) => {
+    let pageMap: Record<string, any> = {};
+    const complexity = r.gem_page_complexity ?? r.page_complexity ?? r.per_page_complexity;
 
-  let pageMap: Record<string, any> = {};
-  if (complexityAny && typeof complexityAny === "object" && !Array.isArray(complexityAny)) {
-    // Already a map like { "1": { complexity: "medium" }, ... } or { "1": "medium", ... }
-    pageMap = complexityAny as Record<string, any>;
-  } else if (Array.isArray(complexityAny)) {
-    // Array of complexity values -> index-keyed map
-    pageMap = Object.fromEntries(
-      (complexityAny as any[]).map((v, i) => [String(i + 1), { complexity: v }])
-    );
-  } else if (Array.isArray(r.gem_pages)) {
-    // Array of page objects -> keyed by page/pageNumber/index
-    pageMap = Object.fromEntries(
-      r.gem_pages.map((p: any) => [String(p.page ?? p.pageNumber ?? p.index ?? ""), p])
-    );
-  }
+    if (complexity && typeof complexity === 'object' && !Array.isArray(complexity)) {
+      pageMap = complexity as Record<string, any>;
+    } else if (Array.isArray(r.gem_pages)) {
+      pageMap = Object.fromEntries(
+        r.gem_pages.map((p: any, idx: number) => [
+          String(p.page ?? p.pageNumber ?? p.index ?? (idx + 1)),
+          p,
+        ])
+      );
+    } else if (Array.isArray(complexity)) {
+      pageMap = Object.fromEntries(
+        complexity.map((v: any, i: number) => [String(i + 1), { complexity: v }])
+      );
+    }
 
-  // 2) Per-page auxiliary maps (doc types, names, languages), accepting either maps or arrays
-  const coerceArrayToMap = (arr: any[]) =>
-    Object.fromEntries(arr.map((v, i) => [String(i + 1), v]));
+    const docTypes = r.gem_page_doc_types ?? r.page_doc_types ?? {};
+    const namesMap = r.gem_page_names ?? r.page_names ?? {};
+    const langsMap = r.gem_page_languages ?? r.page_languages ?? {};
+    const confMap  = r.gem_page_confidence ?? r.page_confidence ?? r.per_page_confidence ?? {};
 
-  const docTypesAny = r.gem_page_doc_types ?? r.page_doc_types ?? {};
-  const namesAny = r.gem_page_names ?? r.page_names ?? {};
-  const langsAny = r.gem_page_languages ?? r.page_languages ?? {};
+    const toMap = (v: any) =>
+      Array.isArray(v) ? Object.fromEntries(v.map((x: any, i: number) => [String(i + 1), x])) : v;
 
-  const docTypesMap = Array.isArray(docTypesAny) ? coerceArrayToMap(docTypesAny) : docTypesAny;
-  const namesMap = Array.isArray(namesAny) ? coerceArrayToMap(namesAny) : namesAny;
-  const langsMap = Array.isArray(langsAny) ? coerceArrayToMap(langsAny) : langsAny;
+    const docTypesMap = toMap(docTypes);
+    const namesK = toMap(namesMap);
+    const langsK = toMap(langsMap);
+    const confK  = toMap(confMap);
 
-  // 3) Pages = union of keys from all sources to avoid dropping info when one map is empty
-  const keyUnion = new Set<string>([
-    ...Object.keys(pageMap || {}),
-    ...Object.keys(docTypesMap || {}),
-    ...Object.keys(namesMap || {}),
-    ...Object.keys(langsMap || {}),
-  ].filter(Boolean));
+    const per_page = Object.keys(pageMap)
+      .filter((k) => k)
+      .sort((a, b) => Number(a) - Number(b))
+      .map((k) => {
+        const v = pageMap[k];
+        const complexityVal = typeof v === 'string' ? v : v?.complexity ?? v?.score ?? '';
+        const docType = docTypesMap?.[k] ?? v?.docType ?? v?.doc_type ?? '';
+        const names = Array.isArray(namesK?.[k]) ? namesK[k] : v?.names ?? [];
+        const langs = Array.isArray(langsK?.[k]) ? langsK[k] : v?.languages ?? [];
+        let conf = confK?.[k] ?? v?.confidence ?? v?.confidence_score ?? v?.score_pct;
+        if (typeof conf === 'number' && conf <= 1) conf = Math.round(conf * 100);
+        if (typeof conf === 'number' && conf > 100) conf = Math.round(conf);
+        return { page: k, complexity: complexityVal, docType, names, languages: langs, confidence: conf };
+      });
 
-  const ensureArray = (x: any) =>
-    Array.isArray(x) ? x : (x == null ? [] : [x]);
-
-  const per_page = Array.from(keyUnion).map((k) => {
-    const v = (pageMap && pageMap[k]) || {};
-    const complexityVal =
-      (typeof v === "string" ? v : (v?.complexity ?? v?.score)) ??
-      (typeof complexityAny === "object" && !Array.isArray(complexityAny) ? complexityAny?.[k] : "") ??
-      "";
-
-    const docType = (docTypesMap && docTypesMap[k]) ?? v?.docType ?? v?.doc_type ?? "";
-    const names = Array.isArray(namesMap?.[k]) ? namesMap[k] : ensureArray(v?.names);
-    const languages = Array.isArray(langsMap?.[k]) ? langsMap[k] : ensureArray(v?.languages);
-
-    return { page: k, complexity: complexityVal, docType, names, languages };
-  });
-
-  // 4) Doc-level fields with broad fallbacks
-  const langsAllAny = r.gem_languages_all ?? r.languages_all ?? r.languages ?? [];
-  const gem_languages_all = Array.isArray(langsAllAny) ? langsAllAny : ensureArray(langsAllAny);
-
-  return {
-    file_name: r.file_name ?? r.fileName ?? "unknown",
-    gem_status: r.gem_status ?? r.status ?? "",
-    gem_message: r.gem_message ?? r.message ?? "",
-    gem_languages_all,
-    per_page,
-  };
-}
-
+    return {
+      file_name: r.file_name ?? r.fileName ?? 'unknown',
+      gem_status: r.gem_status ?? r.status ?? '',
+      gem_message: r.gem_message ?? r.message ?? '',
+      gem_languages_all: r.gem_languages_all ?? r.languages_all ?? r.languages ?? [],
       per_page,
     };
-  }
+  };
 
   const startGeminiPolling = (qid: string) => {
     let tries = 0;
@@ -588,22 +586,10 @@ const normalized = (Array.isArray(res?.results) ? res.results : []).map((r: any)
         const normalized = (rows || []).map(normalizeGemRow);
         setGemResults(normalized);
 
-// Consider a row "done" if it has a terminal status or an explicit done flag
-const terminalStatuses = new Set(["success", "error", "done", "completed"]);
-
-const done = normalized.every((r: any) => {
-  // honor explicit boolean flags if present
-  const boolish =
-    r.isDone ?? r.done ?? r.completed ?? r.complete ?? r.finished;
-  if (typeof boolish === "boolean") return boolish;
-
-  // otherwise, fall back to string status (with broad key aliasing)
-  const s = String(r.gem_status ?? r.status ?? "")
-    .trim()
-    .toLowerCase();
-  return terminalStatuses.has(s);
-});
-
+        const done = normalized.every((r: any) => {
+          const s = String(r.gem_status || '').toLowerCase();
+          return s === 'success' || s === 'error' || s === 'done' || s === 'completed';
+        });
         if (done || tries >= max) {
           clearInterval(iv);
           setGemLoading(false);
@@ -642,6 +628,37 @@ const done = normalized.every((r: any) => {
       runOcrPreview();
     }
   }, [screen, quoteId]);
+
+  const OCR_WORDS_PER_BILLABLE = 250;
+  const ocrRows = ocrPreview.flatMap((r) => {
+    const words = Array.isArray(r.wordsPerPage) ? r.wordsPerPage : [];
+    return words.map((w, idx) => ({
+      fileName: r.fileName,
+      page: idx + 1,
+      words: Number(w) || 0,
+      billablePages: Number(((Number(w) || 0) / OCR_WORDS_PER_BILLABLE).toFixed(2)),
+    }));
+  });
+
+  const gemRows = (Array.isArray(gemResults) ? gemResults : []).flatMap((row: any) => {
+    const file = row.file_name || 'unknown';
+    const topLangs = Array.isArray(row.gem_languages_all) ? row.gem_languages_all : [];
+    return Array.isArray(row.per_page) ? row.per_page.map((p: any) => {
+      const langs = Array.isArray(p.languages) && p.languages.length ? p.languages : topLangs;
+      const langFull = langs.map((x: string) => toLanguageName(x)).join(', ');
+      const names = Array.isArray(p.names) ? p.names.join(', ') : '';
+      const conf = typeof p.confidence === 'number' ? `${Math.round(p.confidence)}%` : '';
+      return {
+        fileName: file,
+        docType: p.docType || '',
+        page: p.page || '',
+        language: langFull,
+        complexity: p.complexity || '',
+        names,
+        confidence: conf,
+      };
+    }) : [];
+  });
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -797,152 +814,90 @@ const done = normalized.every((r: any) => {
         {screen === 'review' && (
           <div className="space-y-6">
             <h1 className="h1">Review Your Translation Quote</h1>
-            <p className="subtle">Transparent pricing. No hidden fees.</p>
             {quoteId && (
               <div aria-label="Quote ID" style={{ marginBottom: 8 }}>
                 <strong>Quote ID:</strong> {quoteId}
               </div>
             )}
-            <div className="table-card">
-              <table className="table" role="table">
-                <thead>
-                  <tr>
-                    <th>Filename</th>
-                    <th>Billable Pages (total)</th>
-                    <th>Rate</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fileSummaries.map(f => (
-                    <tr key={f.fileName}>
-                      <td>{f.fileName}</td>
-                      <td>{f.pages}</td>
-                      <td>${rate.toFixed(2)}</td>
-                      <td>${(f.pages * rate).toFixed(2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="total-row">
-                    <td>Total Billable Pages</td>
-                    <td>{billablePagesTotal}</td>
-                    <td></td>
-                    <td className="total-amount right">${total.toFixed(2)}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-            <div className="row">
-              <button className="btn btn-success" onClick={()=>setScreen('form')}>🔒 Accept & Pay Securely</button>
-              <button className="btn btn-outline" onClick={sendEmail}>Email this Quote</button>
-            </div>
-            <div className="trust" aria-hidden="true">
-              <span>✅ IRCC Accepted</span><span>✅ Alberta Govt Approved</span><span>✅ Secure Payments</span>
-            </div>
-            <details className="mt-4">
-              <summary className="cursor-pointer">OCR Results</summary>
-              <div className="mt-2 space-y-2">
-                {ocrError && <p className="help">{ocrError}</p>}
-                <table className="table" aria-label="OCR results">
+
+            {/* OCR Results: open, no accordion */}
+            <div>
+              <h2 className="h2 mb-2">OCR Results</h2>
+              {ocrError && <p className="help text-red-600">{ocrError}</p>}
+              <div className="table-card">
+                <table className="table" role="table" aria-label="OCR results (per page)">
                   <thead>
                     <tr>
-                      <th>File Name</th>
-                      <th>Pages</th>
-                      <th>Words/Page</th>
-                      <th>Language</th>
-                      <th>Total Words</th>
-                      <th>Status</th>
+                      <th>Filename</th>
+                      <th>Page No.</th>
+                      <th>Words</th>
+                      <th>Billable Pages</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {ocrPreview.length > 0 ? (
-                      ocrPreview.map((r) => (
-                        <tr key={r.fileName}>
+                    {ocrRows.length > 0 ? (
+                      ocrRows.map((r, i) => (
+                        <tr key={`${r.fileName}-${r.page}-${i}`}>
                           <td>{r.fileName}</td>
-                          <td>{r.pageCount}</td>
-                          <td>{r.wordsPerPage.join(', ')}</td>
-                          <td>{r.detectedLanguage}</td>
-                          <td>{r.totalWordCount}</td>
-                          <td>
-                            <span title={r.ocrMessage || ''}>
-                              {r.ocrStatus}
-                              {r.ocrMessage ? ` — ${r.ocrMessage}` : ''}
-                            </span>
-                          </td>
+                          <td>{r.page}</td>
+                          <td>{r.words}</td>
+                          <td>{r.billablePages.toFixed(2)}</td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td>sample.pdf</td>
-                        <td>2</td>
-                        <td>120, 130</td>
-                        <td>en</td>
-                        <td>250</td>
-                        <td>success — Sample format only — awaiting OCR.</td>
+                        <td colSpan={4}>No OCR details available yet.</td>
                       </tr>
                     )}
                   </tbody>
                 </table>
-                <button
-                  className="btn btn-outline"
-                  onClick={runGemini}
-                  disabled={gemLoading}
-                >
+              </div>
+            </div>
+
+            {/* Gemini Analysis: open, no accordion */}
+            <div>
+              <h2 className="h2 mb-2">Gemini Analysis</h2>
+              {gemError && <p className="help text-red-600">{gemError}</p>}
+              <div className="table-card">
+                <table className="table" role="table" aria-label="Gemini analysis (per page)">
+                  <thead>
+                    <tr>
+                      <th>Filename</th>
+                      <th>Document Type</th>
+                      <th>Page No.</th>
+                      <th>Language</th>
+                      <th>Complexity</th>
+                      <th>Names</th>
+                      <th>Confidence Score (in%)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {gemRows.length > 0 ? (
+                      gemRows.map((r, i) => (
+                        <tr key={`${r.fileName}-${r.page}-${i}`}>
+                          <td>{r.fileName}</td>
+                          <td>{r.docType}</td>
+                          <td>{r.page}</td>
+                          <td>{r.language}</td>
+                          <td>{r.complexity}</td>
+                          <td>{r.names}</td>
+                          <td>{r.confidence}</td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={7}>Per-page details not available yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-2">
+                <button className="btn btn-outline" onClick={runGemini} disabled={gemLoading}>
                   {gemLoading ? 'Running…' : 'Run Gemini Analysis'}
                 </button>
-                {gemError && <p className="help">{gemError}</p>}
-                {gemResults.length > 0 && (
-                  <div className="mt-2 space-y-4">
-                    {gemResults.map((r: any) => (
-                      <div key={r.file_name}>
-                        <p className="font-semibold">
-                          {r.file_name}
-                          {Array.isArray(r.gem_languages_all) && r.gem_languages_all.length > 0 && (
-                            <span className="ml-2 text-sm text-gray-600">
-                              Languages: {r.gem_languages_all.join(', ')}
-                            </span>
-                          )}
-                        </p>
-                        <table className="table mt-1" aria-label="Gemini page results">
-                          <thead>
-                            <tr>
-                              <th>Page</th>
-                              <th>Complexity</th>
-                              <th>Doc Type</th>
-                              <th>Names</th>
-                              <th>Languages</th>
-                              <th>Status</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {Array.isArray(r.per_page) && r.per_page.length > 0 ? (
-                              r.per_page.map((p: any) => (
-                                <tr key={`${r.file_name}-${p.page}`}>
-                                  <td>{p.page}</td>
-                                  <td>{p.complexity || ''}</td>
-                                  <td>{p.docType || ''}</td>
-                                  <td>{Array.isArray(p.names) ? p.names.join(', ') : ''}</td>
-                                  <td>{Array.isArray(p.languages) ? p.languages.join(', ') : ''}</td>
-                                  <td>
-                                    <span title={r.gem_message || ''}>
-                                      {r.gem_status || ''}
-                                      {r.gem_message ? ` — ${r.gem_message}` : ''}
-                                    </span>
-                                  </td>
-                                </tr>
-                              ))
-                            ) : (
-                              <tr><td colSpan={6}>Per-page details not available yet.</td></tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
-            </details>
+            </div>
           </div>
         )}
         {screen === 'result' && (
