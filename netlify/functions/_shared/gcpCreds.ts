@@ -15,11 +15,8 @@ export async function loadGcpCreds() {
     .download("gcp_sa.json");
   if (error) throw new Error("Unable to load secrets/gcp_sa.json: " + error.message);
   const text = await data.text();
-  try {
-    credsCache = JSON.parse(text);
-  } catch {
-    throw new Error("gcp_sa.json is not valid JSON");
-  }
+  try { credsCache = JSON.parse(text); }
+  catch { throw new Error("gcp_sa.json is not valid JSON"); }
   return credsCache;
 }
 
