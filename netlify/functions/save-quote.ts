@@ -1,155 +1,133 @@
-// netlify/functions/save-quote.ts
-import type { Handler } from '@netlify/functions';
-import Busboy from 'busboy';
-import { createClient } from '@supabase/supabase-js';
+import type { Handler } from "@netlify/functions";
+import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL =
-  process.env.SUPABASE_URL ||
-  process.env.SUPABASE_PROJECT_URL ||
-  '';
+type NullableString = string | null | undefined;
 
-const SUPABASE_SERVICE_ROLE =
-  process.env.SUPABASE_SERVICE_ROLE ||
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  '';
-
-export const handler: Handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return {
-      statusCode: 405,
-      headers: { 'Allow': 'POST', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'Method Not Allowed' }),
-    };
-  }
-
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) {
-    return {
-      statusCode: 500,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'Server env missing SUPABASE_URL and/or SUPABASE_SERVICE_ROLE(_KEY).' }),
-    };
-  }
-
-  return await new Promise((resolve) => {
-    const busboy = Busboy({
-      headers: event.headers,
-      limits: { fileSize: 25 * 1024 * 1024 },
-    });
-
-    const fields: Record<string, string> = {};
-    const uploads: { filename: string; data: Buffer; contentType: string }[] = [];
-    let fileTooLarge = false;
-
-    busboy.on('field', (name, val) => { fields[name] = val; });
-
-    busboy.on('file', (_name, file, info) => {
-      const { filename, mimeType } = info;
-      const chunks: Buffer[] = [];
-      file.on('data', (d) => chunks.push(d));
-      file.on('limit', () => { fileTooLarge = true; file.resume(); });
-      file.on('end', () => {
-        uploads.push({
-          filename,
-          data: Buffer.concat(chunks),
-          contentType: mimeType || 'application/octet-stream',
-        });
-      });
-    });
-
-    busboy.on('error', () => {
-      resolve({
-        statusCode: 500,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ error: 'Multipart parsing failed' }),
-      });
-    });
-
-    busboy.on('finish', async () => {
-      if (fileTooLarge) {
-        return resolve({
-          statusCode: 400,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ error: 'File too large' }),
-        });
-      }
-
-      try {
-        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE);
-
-        const { data: submission, error: insertErr } = await supabase
-          .from('quote_submissions')
-          .insert({
-            name: fields.name,
-            email: fields.email,
-            phone: fields.phone,
-            intended_use: fields.intendedUse,
-            source_language: fields.sourceLanguage,
-            target_language: fields.targetLanguage,
-          })
-          .select('quote_id')
-          .single();
-
-        if (insertErr || !submission) {
-          throw new Error(insertErr?.message || 'Database insert failed');
-        }
-        const quoteId = submission.quote_id as string;
-
-        const saved: { file_name: string; storage_path: string; public_url: string | null }[] = [];
-
-        for (const upload of uploads) {
-          const pathWithinBucket = `${quoteId}/${upload.filename}`;
-          const { error: uploadErr } = await supabase
-            .storage
-            .from('orders')
-            .upload(pathWithinBucket, upload.data, {
-              upsert: true,
-              contentType: upload.contentType,
-            });
-
-          if (uploadErr) {
-            throw new Error(uploadErr.message || 'Storage upload failed');
-          }
-
-          const storage_path = `orders/${pathWithinBucket}`;
-          const public_url = null; // keep bucket private
-
-          const { error: fileErr } = await supabase.from('quote_files').insert({
-            quote_id: quoteId,
-            file_name: upload.filename,
-            storage_path,
-            public_url,
-          });
-          if (fileErr) {
-            throw new Error(fileErr.message || 'File record insert failed');
-          }
-
-          saved.push({
-            file_name: upload.filename,
-            storage_path,
-            public_url,
-          });
-        }
-
-        return resolve({
-          statusCode: 200,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ quote_id: quoteId, files: saved }),
-        });
-      } catch (err: any) {
-        return resolve({
-          statusCode: 500,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ error: err?.message || 'Server error' }),
-        });
-      }
-    });
-
-    const bodyBuffer = event.isBase64Encoded
-      ? Buffer.from(event.body || '', 'base64')
-      : Buffer.from(event.body || '', 'utf8');
-
-    busboy.end(bodyBuffer);
-  });
+type SaveQuoteBody = {
+  quote_id?: string;
+  name?: NullableString;
+  email?: NullableString;
+  phone?: NullableString;
+  intended_use?: NullableString;
+  source_language?: NullableString;
+  target_language?: NullableString;
+  file_name?: NullableString;
+  storage_path?: NullableString;
+  public_url?: NullableString;
 };
 
-export default handler;
+function mustGet(name: string) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Missing server configuration: ${name}`);
+  }
+  return value;
+}
+
+const supabase = createClient(
+  mustGet("SUPABASE_URL"),
+  mustGet("SUPABASE_SERVICE_ROLE_KEY")
+);
+
+function normalize(value: NullableString) {
+  if (value === undefined) return undefined;
+  const trimmed = typeof value === "string" ? value.trim() : value;
+  return trimmed === "" ? null : trimmed;
+}
+
+async function ensureQuoteId(body: SaveQuoteBody) {
+  const incoming = normalize(body.quote_id);
+  if (incoming) return incoming;
+
+  const { data, error } = await supabase.rpc("get_next_cs_quote_id");
+  if (error || !data) {
+    throw new Error(
+      `Failed to allocate quote_id${error?.message ? `: ${error.message}` : ""}`
+    );
+  }
+  return String(data);
+}
+
+export const handler: Handler = async (event) => {
+  const started = Date.now();
+
+  try {
+    if (event.httpMethod !== "POST") {
+      return { statusCode: 405, body: "Method Not Allowed" };
+    }
+
+    const body = event.body ? (JSON.parse(event.body) as SaveQuoteBody) : {};
+
+    const quoteId = await ensureQuoteId(body);
+
+    const submissionPayload: Record<string, unknown> = { quote_id: quoteId };
+
+    const name = normalize(body.name);
+    if (name !== undefined) submissionPayload.name = name;
+
+    const email = normalize(body.email);
+    if (email !== undefined) submissionPayload.email = email;
+
+    const phone = normalize(body.phone);
+    if (phone !== undefined) submissionPayload.phone = phone;
+
+    const intendedUse = normalize(body.intended_use);
+    if (intendedUse !== undefined) submissionPayload.intended_use = intendedUse;
+
+    const sourceLanguage = normalize(body.source_language);
+    if (sourceLanguage !== undefined) submissionPayload.source_language = sourceLanguage;
+
+    const targetLanguage = normalize(body.target_language);
+    if (targetLanguage !== undefined) submissionPayload.target_language = targetLanguage;
+
+    const hasSubmissionFields = Object.keys(submissionPayload).length > 1;
+
+    if (hasSubmissionFields) {
+      const { error } = await supabase
+        .from("quote_submissions")
+        .upsert(submissionPayload, { onConflict: "quote_id" });
+      if (error) {
+        throw new Error(`DB upsert quote_submissions: ${error.message}`);
+      }
+    }
+
+    const fileName = normalize(body.file_name);
+    const storagePath = normalize(body.storage_path);
+    const publicUrl = normalize(body.public_url);
+
+    if (fileName || storagePath || publicUrl) {
+      if (!fileName) {
+        throw new Error("file_name is required when storing file metadata");
+      }
+
+      const filePayload: Record<string, unknown> = {
+        quote_id: quoteId,
+        file_name: fileName,
+        gem_status: "pending",
+        gem_message: "file saved",
+      };
+
+      if (storagePath !== undefined) filePayload.storage_path = storagePath;
+      if (publicUrl !== undefined) filePayload.public_url = publicUrl;
+
+      const { error } = await supabase
+        .from("quote_files")
+        .upsert(filePayload, { onConflict: "quote_id,file_name" });
+      if (error) {
+        throw new Error(`DB upsert quote_files: ${error.message}`);
+      }
+    }
+
+    return {
+      statusCode: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ok: true, quote_id: quoteId, ms: Date.now() - started }),
+    };
+  } catch (error: any) {
+    return {
+      statusCode: 500,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ok: false, error: error?.message || "Unknown error" }),
+    };
+  }
+};

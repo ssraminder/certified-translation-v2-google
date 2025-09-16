@@ -20,3 +20,14 @@ export interface ApiResponse {
   data?: any;
   error?: string;
 }
+
+export interface OcrResult {
+  fileName: string;
+  pageCount: number;
+  wordsPerPage: number[];
+  detectedLanguage: string;
+  totalWordCount: number;
+  complexity: 'medium';
+  ocrStatus: 'success' | 'error';
+  ocrMessage: string;
+}

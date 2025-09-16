@@ -2,7 +2,7 @@
 // File path could be: /api/generate-story.ts
 // Note: Your deployment platform (Vercel, Netlify, Digital Ocean) must support streaming/edge functions for this to work.
 
-// import { GoogleGenAI } from '@google/genai';
+// import { GoogleGenerativeAI } from '@google/generative-ai/server';
 // import type { Request, Response } from 'express'; // or your platform's specific types
 
 /*

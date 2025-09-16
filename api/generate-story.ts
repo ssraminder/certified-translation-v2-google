@@ -2,7 +2,7 @@
 // File path: /api/generate-story.ts
 // Note: Your deployment platform (Vercel, Netlify, Digital Ocean) must support streaming/edge functions for this to work.
 
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenerativeAI } from '@google/generative-ai/server';
 // import type { Request, Response } from 'express'; // or your platform's specific types
 // Fix: Use Node.js http types and define custom interfaces for Express-like compatibility.
 import type { IncomingMessage, ServerResponse } from 'http';
@@ -38,20 +38,22 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
         return res.status(400).json({ success: false, error: 'Prompt is required.' });
     }
 
-    const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-    
-    const stream = await ai.models.generateContentStream({
-        model: 'gemini-2.5-flash',
-        contents: `Write a short story about: ${prompt}`,
-    });
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const streamResult = await model.generateContentStream(
+        `Write a short story about: ${prompt}`
+    );
     
     // Set headers for streaming
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Transfer-Encoding', 'chunked');
 
     // Pipe the streamed chunks to the response
-    for await (const chunk of stream) {
-        res.write(chunk.text);
+    for await (const chunk of streamResult.stream) {
+        const chunkText = chunk.text();
+        if (chunkText) {
+            res.write(chunkText);
+        }
     }
 
     res.end(); // End the response stream
