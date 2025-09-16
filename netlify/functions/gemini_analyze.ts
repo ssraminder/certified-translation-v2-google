@@ -1,265 +1,93 @@
-import type { Handler } from '@netlify/functions';
-import { GoogleGenerativeAI } from '@google/generative-ai/server';
-import { Storage } from '@google-cloud/storage';
-import { createClient } from '@supabase/supabase-js';
+import type { Handler } from "@netlify/functions";
+import { GoogleGenerativeAI } from "@google/generative-ai/server";
+import { Storage } from "@google-cloud/storage";
+import { getStorage } from "./_shared/gcpCreds";
+import { createClient } from "@supabase/supabase-js";
 
-const REQUIRED_ENV_VARS = [
-  'GOOGLE_API_KEY',
-  'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
-  'GCP_PROJECT_ID',
-  'GCP_SA_KEY_JSON',
-  'GCS_OUTPUT_BUCKET',
+const OUTPUT_BUCKET = process.env.GCS_OUTPUT_BUCKET!;
+const DOC_TYPES = [
+  "passport","birth_certificate","marriage_certificate","divorce_certificate",
+  "driver_license","id_card","pr_card","work_permit","study_permit",
+  "diploma","transcript","police_certificate","bank_statement","payslip",
+  "utility_bill","tax_return","letter","invoice","other"
 ];
 
-const MODEL_ID = 'gemini-2.0-pro';
-const TEXT_CAP = 50_000;
-const VALID_DOC_TYPES = new Set([
-  'passport',
-  'birth_certificate',
-  'marriage_certificate',
-  'divorce_certificate',
-  'driver_license',
-  'id_card',
-  'pr_card',
-  'work_permit',
-  'study_permit',
-  'diploma',
-  'transcript',
-  'police_certificate',
-  'bank_statement',
-  'payslip',
-  'utility_bill',
-  'tax_return',
-  'letter',
-  'invoice',
-  'other',
-]);
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing server configuration: ${name}`);
-  }
-  return value;
-}
-
-async function loadOcrText(storage: Storage, bucket: string, prefix: string): Promise<string> {
-  const [files] = await storage.bucket(bucket).getFiles({ prefix });
-  const jsonFiles = files
-    .filter((file) => file.name.endsWith('.json'))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  let combined = '';
-  for (const file of jsonFiles) {
-    if (combined.length >= TEXT_CAP) break;
-    const [buf] = await file.download();
-    let payload: any;
-    try {
-      payload = JSON.parse(buf.toString('utf8'));
-    } catch (err) {
-      console.warn('Unable to parse OCR JSON', file.name, err);
-      continue;
-    }
-
-    const responses: any[] = Array.isArray(payload?.responses)
-      ? payload.responses
-      : payload?.responses
-      ? [payload.responses]
-      : [];
-
-    for (const response of responses) {
-      if (combined.length >= TEXT_CAP) break;
-      const text = response?.fullTextAnnotation?.text;
-      if (!text) continue;
-      const remaining = Math.max(0, TEXT_CAP - combined.length);
-      combined += text.slice(0, remaining);
-      if (text.length > remaining) {
-        combined += '\n[TRUNCATED]\n';
-      }
+async function loadOcrText(prefix: string, cap = 50000) {
+  const storage = await getStorage(Storage);
+  const [files] = await storage.bucket(OUTPUT_BUCKET).getFiles({ prefix });
+  const jsonFiles = files.filter(f => f.name.endsWith(".json")).sort((a,b)=>a.name.localeCompare(b.name));
+  let all = "";
+  for (const jf of jsonFiles) {
+    if (all.length >= cap) break;
+    const [buf] = await jf.download();
+    const payload = JSON.parse(buf.toString("utf8"));
+    for (const r of (payload.responses || [])) {
+      const t = r?.fullTextAnnotation?.text || "";
+      if (!t) continue;
+      const need = Math.max(0, cap - all.length);
+      all += t.slice(0, need) + (t.length > need ? "\n[TRUNCATED]\n" : "");
     }
   }
-
-  return combined.trim();
+  return all.trim();
 }
 
-function extractJsonBlock(raw: string): string {
-  const match = raw.match(/\{[\s\S]*\}/);
-  return match ? match[0] : raw;
-}
-
-function sanitizeNames(value: unknown): string[] | null {
-  if (!Array.isArray(value)) return null;
-  const names = value
-    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
-    .filter(Boolean)
-    .slice(0, 5);
-  return names.length ? names : null;
+function coerceJson(text: string) {
+  const fence = text.match(/```json\s*([\s\S]*?)```/i)?.[1];
+  const body = fence || text;
+  const obj = body.match(/\{[\s\S]*\}/);
+  return obj ? obj[0] : body;
 }
 
 export const handler: Handler = async (event) => {
   try {
-    if (event.httpMethod !== 'GET') {
-      return {
-        statusCode: 405,
-        headers: { 'Allow': 'GET', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ok: false, error: 'Method Not Allowed' }),
-      };
-    }
+    if (event.httpMethod !== "GET") return { statusCode: 405, body: "Method Not Allowed" };
+    const quote_id = (event.queryStringParameters?.quote_id || "").trim();
+    const file_name = (event.queryStringParameters?.file_name || "").trim();
+    if (!quote_id || !file_name) return { statusCode: 400, body: "quote_id and file_name required" };
 
-    for (const key of REQUIRED_ENV_VARS) {
-      requireEnv(key);
-    }
+    const prefix = `vision/${quote_id}/${file_name}/`;
+    const text = await loadOcrText(prefix);
+    if (!text) return { statusCode: 404, body: "No OCR text found" };
 
-    const quoteId = (event.queryStringParameters?.quote_id || '').trim();
-    const fileName = (event.queryStringParameters?.file_name || '').trim();
+    const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-pro" });
 
-    if (!quoteId || !fileName) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ok: false, error: 'quote_id and file_name required' }),
-      };
-    }
+    const prompt = `You are an assistant that outputs STRICT JSON ONLY (no prose).
+Return:
+{
+  "doc_type": one of ${JSON.stringify(DOC_TYPES)},
+  "primary_language": string (IETF/ISO code),
+  "secondary_languages": string[],
+  "names": string[] (max 5),
+  "confidence": number between 0 and 1
+}
+Document text:
+-----
+${text}
+-----`;
 
-    const googleApiKey = requireEnv('GOOGLE_API_KEY');
-    const supabaseUrl = requireEnv('SUPABASE_URL');
-    const supabaseKey = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
-    const projectId = requireEnv('GCP_PROJECT_ID');
-    const serviceAccountJson = requireEnv('GCP_SA_KEY_JSON');
-    const outputBucket = requireEnv('GCS_OUTPUT_BUCKET');
-
-    const credentials = JSON.parse(serviceAccountJson);
-    const storage = new Storage({ projectId, credentials });
-    const prefix = `vision/${quoteId}/${fileName}/`;
-
-    const ocrText = await loadOcrText(storage, outputBucket, prefix);
-    if (!ocrText) {
-      return {
-        statusCode: 404,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ok: false, error: 'No OCR text found' }),
-      };
-    }
-
-    const supabase = createClient(supabaseUrl, supabaseKey);
-    await supabase
-      .from('quote_files')
-      .update({
-        gem_status: 'processing',
-        gem_message: 'Gemini classification running',
-      })
-      .eq('quote_id', quoteId)
-      .eq('file_name', fileName);
-
-    const genAI = new GoogleGenerativeAI(googleApiKey);
-    const model = genAI.getGenerativeModel({ model: MODEL_ID });
-
-    const prompt = `You are a document classifier. Given OCR text from a scanned document, respond with strict JSON only.
-
-Infer:
-- doc_type: one of ["passport","birth_certificate","marriage_certificate","divorce_certificate","driver_license","id_card","pr_card","work_permit","study_permit","diploma","transcript","police_certificate","bank_statement","payslip","utility_bill","tax_return","letter","invoice","other"]
-- primary_language: IETF language code if possible (e.g., "en", "fr", "ar", "zh")
-- secondary_languages: array of additional language codes (may be empty)
-- names: up to 5 most likely person names (array of strings; omit duplicates)
-- confidence: number 0..1 representing your confidence
-
-Return JSON with keys: doc_type, primary_language, secondary_languages, names, confidence.`;
-
-    const result = await model.generateContent([
-      { text: prompt },
-      { text: ocrText },
-    ]);
-
-    const raw = result.response.text().trim();
-    const jsonBlock = extractJsonBlock(raw);
-
+    const res = await model.generateContent([{ text: prompt }]);
+    const raw = res.response.text().trim();
     let parsed: any;
-    try {
-      parsed = JSON.parse(jsonBlock);
-    } catch (err) {
-      console.error('Gemini JSON parse failed', raw, err);
-      await supabase
-        .from('quote_files')
-        .update({
-          gem_status: 'error',
-          gem_message: 'Gemini parse error',
-          gem_model: MODEL_ID,
-        })
-        .eq('quote_id', quoteId)
-        .eq('file_name', fileName);
-      return {
-        statusCode: 502,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ok: false, error: 'Gemini returned invalid JSON' }),
-      };
-    }
+    try { parsed = JSON.parse(coerceJson(raw)); }
+    catch { return { statusCode: 502, body: `Bad JSON from model: ${raw}` }; }
 
-    const docTypeRaw = typeof parsed?.doc_type === 'string' ? parsed.doc_type.toLowerCase() : 'other';
-    const docType = VALID_DOC_TYPES.has(docTypeRaw) ? docTypeRaw : 'other';
-    const primaryLanguage = typeof parsed?.primary_language === 'string' ? parsed.primary_language.toLowerCase() : null;
-    const secondaryLanguages = Array.isArray(parsed?.secondary_languages)
-      ? parsed.secondary_languages
-          .map((entry: unknown) => (typeof entry === 'string' ? entry.toLowerCase() : ''))
-          .filter(Boolean)
-          .slice(0, 5)
-      : [];
-    const names = sanitizeNames(parsed?.names);
-    const confidence = typeof parsed?.confidence === 'number' ? parsed.confidence : null;
-
-    await supabase
-      .from('quote_files')
-      .update({
-        gem_status: 'success',
-        gem_message: 'Gemini classification complete',
-        gem_doc_type: docType,
-        gem_language_code: primaryLanguage,
-        gem_names: names,
-        gem_model: MODEL_ID,
-        gem_completed_at: new Date().toISOString(),
-      })
-      .eq('quote_id', quoteId)
-      .eq('file_name', fileName);
-
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ok: true,
-        doc_type: docType,
-        primary_language: primaryLanguage,
-        secondary_languages: secondaryLanguages,
-        names: names || [],
-        confidence,
-      }),
+    const supa = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const update = {
+      gem_doc_type: DOC_TYPES.includes(parsed.doc_type) ? parsed.doc_type : "other",
+      gem_language_code: parsed.primary_language || null,
+      gem_names: parsed.names || null,
+      gem_status: "success",
+      gem_message: "Gemini classification complete",
+      gem_model: "gemini-2.0-pro",
+      gem_completed_at: new Date().toISOString(),
     };
-  } catch (err: any) {
-    console.error('gemini_analyze failed', err);
-    try {
-      const quoteId = (event.queryStringParameters?.quote_id || '').trim();
-      const fileName = (event.queryStringParameters?.file_name || '').trim();
-      const supabaseUrl = process.env.SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-      if (quoteId && fileName && supabaseUrl && supabaseKey) {
-        const supabase = createClient(supabaseUrl, supabaseKey);
-        await supabase
-          .from('quote_files')
-          .update({
-            gem_status: 'error',
-            gem_message: (err?.message || 'Gemini classification failed').slice(0, 400),
-            gem_model: MODEL_ID,
-          })
-          .eq('quote_id', quoteId)
-          .eq('file_name', fileName);
-      }
-    } catch (updateErr) {
-      console.error('Failed to persist Gemini error state', updateErr);
-    }
-    const message = err?.message || 'Internal error';
-    return {
-      statusCode: 500,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ok: false, error: message }),
-    };
+    const { error } = await supa.from("quote_files")
+      .update(update).eq("quote_id", quote_id).eq("file_name", file_name);
+    if (error) return { statusCode: 500, body: `DB error: ${error.message}` };
+
+    return { statusCode: 200, body: JSON.stringify({ ok: true, update }) };
+  } catch (e: any) {
+    return { statusCode: 500, body: JSON.stringify({ ok: false, error: e?.message || String(e) }) };
   }
 };
