@@ -226,3 +226,12 @@ curl -X POST https://<deploy-domain>/api/save-quote \
 - Added `gemini_analyze.ts` Netlify Function using `@google/generative-ai/server` with `GOOGLE_API_KEY`.
 - Reads OCR text from GCS output prefix, classifies doc type/languages/names, writes to `public.quote_files`.
 - Client calls this after OCR success; verified deterministic JSON handling and DB update.
+## 2025-09-15 07:00 PM MDT — Vision OCR + Gemini Finalization
+
+**ISO timestamp:** 2025-09-16T01:00:15.502453+00:00
+
+**Actions Summary**
+- Set proper env names (including **GOOGLE_API_KEY**); added Netlify functions `ocr_start`, `ocr_poll`, `gemini_analyze`.
+- Frontend now triggers OCR → poll → Gemini, then refreshes Supabase row.
+- Fixed client Supabase usage (sdk or headers).
+- Verified on scanned PDF: row updated with OCR metrics and Gemini fields.
