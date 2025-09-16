@@ -22,11 +22,34 @@ type SaveQuoteBody = {
 
 export const handler: Handler = async (event) => {
   try {
-    if (event.httpMethod !== "POST") return { statusCode: 405, body: "Method Not Allowed" };
-    const b = JSON.parse(event.body || "{}") as SaveQuoteBody;
-    if (!b.quote_id) return { statusCode: 400, body: "Missing quote_id" };
+    if (event.httpMethod !== "POST") {
+      return {
+        statusCode: 405,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ok: false, error: "Method Not Allowed" })
+      };
+    }
 
-    // --- quote_submissions manual UPSERT ---
+    let b: SaveQuoteBody;
+    try {
+      b = JSON.parse(event.body || "{}");
+    } catch {
+      return {
+        statusCode: 400,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ok: false, error: "Body is not valid JSON" })
+      };
+    }
+
+    if (!b.quote_id) {
+      return {
+        statusCode: 400,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ok: false, error: "Missing quote_id" })
+      };
+    }
+
+    // --- quote_submissions manual upsert ---
     {
       const { data: existing, error: selErr } = await supabase
         .from("quote_submissions")
@@ -54,7 +77,7 @@ export const handler: Handler = async (event) => {
       }
     }
 
-    // --- quote_files manual UPSERT (optional block) ---
+    // --- quote_files manual upsert (optional) ---
     if (b.file_name || b.storage_path || b.public_url !== undefined) {
       const { data: f, error: selErr } = await supabase
         .from("quote_files")
@@ -77,14 +100,8 @@ export const handler: Handler = async (event) => {
         const { error } = await supabase.from("quote_files").insert(payload);
         if (error) throw new Error(`insert quote_files: ${error.message}`);
       } else {
-        const { error } = await supabase.from("quote_files").update(payload)
-          .eq("quote_id", b.quote_id).eq("file_name", b.file_name ?? "");
-        if (error) throw new Error(`update quote_files: ${error.message}`);
-      }
-    }
-
-    return { statusCode: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ ok: true }) };
-  } catch (err: any) {
-    return { statusCode: 500, headers: { "content-type": "application/json" }, body: JSON.stringify({ ok: false, error: err?.message || String(err) }) };
-  }
-};
+        const { error } = await supabase
+          .from("quote_files")
+          .update(payload)
+          .eq("quote_id", b.quote_id)
+          .eq("file_name", b.file_name ?? "");
