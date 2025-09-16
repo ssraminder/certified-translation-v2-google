@@ -15,13 +15,9 @@ export const handler: Handler = async (event) => {
     const storage = await getStorage(Storage);
     const prefix = `vision/${quote_id}/${file_name}/`;
     const [files] = await storage.bucket(OUTPUT_BUCKET).getFiles({ prefix });
-
     const jsonFiles = files.filter(f => f.name.endsWith(".json")).sort((a,b)=>a.name.localeCompare(b.name));
-    if (jsonFiles.length === 0) {
-      return { statusCode: 202, body: JSON.stringify({ ok: false, status: "pending" }) };
-    }
+    if (jsonFiles.length === 0) return { statusCode: 202, body: JSON.stringify({ ok:false, status:"pending" }) };
 
-    // Aggregate text + language
     let allText = "";
     const langMap = new Map<string, number>();
     let pageCount = 0;
@@ -29,15 +25,13 @@ export const handler: Handler = async (event) => {
     for (const f of jsonFiles) {
       const [buf] = await f.download();
       const payload = JSON.parse(buf.toString("utf8"));
-      const responses = payload.responses || [];
-      for (const r of responses) {
+      for (const r of (payload.responses || [])) {
         const fta = r?.fullTextAnnotation;
         if (fta?.text) allText += fta.text + "\n";
         const pages = fta?.pages || [];
         pageCount += pages.length;
         for (const p of pages) {
-          const langs = p?.property?.detectedLanguages || [];
-          for (const l of langs) {
+          for (const l of (p?.property?.detectedLanguages || [])) {
             const code = l.languageCode || "und";
             const conf = Number(l.confidence || 0);
             langMap.set(code, (langMap.get(code) || 0) + conf);
@@ -59,8 +53,8 @@ export const handler: Handler = async (event) => {
       gem_completed_at: new Date().toISOString()
     }).eq("quote_id", quote_id).eq("file_name", file_name);
 
-    return { statusCode: 200, body: JSON.stringify({ ok: true, pages: pageCount, totalWords: words, language: topLang }) };
+    return { statusCode: 200, body: JSON.stringify({ ok:true, pages: pageCount, totalWords: words, language: topLang }) };
   } catch (e: any) {
-    return { statusCode: 500, body: JSON.stringify({ ok: false, error: e?.message || String(e) }) };
+    return { statusCode: 500, body: JSON.stringify({ ok:false, error: e?.message || String(e) }) };
   }
 };
