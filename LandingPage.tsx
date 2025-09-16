@@ -278,6 +278,24 @@ const LandingPage: React.FC = () => {
       );
       const res = await runVisionOcr({ quote_id: quoteId, files: filesPayload });
       setOcrPreview(res.results);
+      const processedFileNames = Array.isArray(res?.results)
+        ? res.results
+            .map((item: any) => item?.fileName)
+            .filter((name: string | undefined): name is string => Boolean(name))
+        : [];
+      if (processedFileNames.length) {
+        setGemLoading(true);
+        setGemError(null);
+        try {
+          await runGeminiAnalyze({ quote_id: quoteId, fileNames: processedFileNames });
+          startGeminiPolling(quoteId);
+        } catch (err: any) {
+          console.error('Gemini analysis failed:', err?.message || err);
+          console.error('Gemini analysis error object:', err);
+          setGemError(err?.message || 'Gemini analysis failed');
+          setGemLoading(false);
+        }
+      }
     } catch (err: any) {
       console.error('OCR failed:', err?.message || err);
       setOcrError(err?.message || 'OCR failed');
@@ -317,7 +335,10 @@ const LandingPage: React.FC = () => {
     setGemLoading(true);
     setGemError(null);
     try {
-      await runGeminiAnalyze({ quote_id: quoteId });
+      await runGeminiAnalyze({
+        quote_id: quoteId,
+        fileNames: fileSummaries.map((f) => f.fileName),
+      });
       startGeminiPolling(quoteId);
     } catch (err: any) {
       console.error('Gemini analysis failed:', err?.message || err);

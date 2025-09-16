@@ -218,3 +218,11 @@ curl -X POST https://<deploy-domain>/api/save-quote \
 - Updated Gemini background worker to read/write only existing `quote_files` columns (`gem_doc_type`, `gem_language_code`, etc.) while keeping status updates unchanged.
 - Simplified REST helpers to filter `quote_files` by `quote_id` and map results to legacy field names without selecting missing columns.
 - Confirmed no UI or layout adjustments were required and documented the schema alignment.
+## 2025-09-15 06:26 PM MDT — Gemini Classification via OCR Output
+
+**ISO timestamp:** 2025-09-16T00:26:08.121381+00:00
+
+**Actions Summary**
+- Added `gemini_analyze.ts` Netlify Function using `@google/generative-ai/server` with `GOOGLE_API_KEY`.
+- Reads OCR text from GCS output prefix, classifies doc type/languages/names, writes to `public.quote_files`.
+- Client calls this after OCR success; verified deterministic JSON handling and DB update.
