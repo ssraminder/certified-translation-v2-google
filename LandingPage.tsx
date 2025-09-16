@@ -7,10 +7,7 @@ import supabase from './src/lib/supabaseClient';
 import { saveQuote, sendQuote, runVisionOcr, runGeminiAnalyze, fetchQuoteFiles } from 'api';
 import { saveQuoteDetails } from "./src/lib/quoteForm";
 import AnalysisOverlay from "./src/components/AnalysisOverlay";
-import { runOcrAndGemini } from "./src/lib/analysisPipeline";
-import { uploadViaSignedUrl, saveQuoteFromUI } from "./src/lib/quoteApi";
-import { resolveQuoteId } from "./src/lib/quoteForm";
-import { ensureQuoteId } from "./src/lib/ensureQuoteId"; // <- keep this
+import { ensureQuoteId } from "./src/lib/ensureQuoteId";
 import type { OcrResult as VisionOcrResult } from './types';
 
 type Screen = 'form' | 'waiting' | 'review' | 'result' | 'error';
@@ -49,6 +46,16 @@ const guessContentType = (file: File) =>
     : 'application/octet-stream');
 
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25MB
+
+// Feature flag: keep auto-analysis OFF
+const AUTO_ANALYZE_ON_UPLOAD = false;
+
+// Dedup helper for multi-file selection
+function mergeSelectedFiles(prev: File[], selected: File[]) {
+  const byKey = new Map(prev.map(f => [f.name + ':' + f.size, f]));
+  for (const f of selected) byKey.set(f.name + ':' + f.size, f);
+  return Array.from(byKey.values());
+}
 
 function uniqSorted(arr: (string | null | undefined)[] = []) {
   return Array.from(new Set(arr.filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b));
@@ -119,11 +126,7 @@ const LandingPage: React.FC = () => {
       const list = target?.files ?? input.files;
       const selected = Array.from(list ?? []);
       if (selected.length === 0) return;
-      setFiles(prev => {
-        const byKey = new Map(prev.map(f => [f.name + ':' + f.size, f]));
-        for (const f of selected) byKey.set(f.name + ':' + f.size, f);
-        return Array.from(byKey.values());
-      });
+      setFiles(prev => mergeSelectedFiles(prev, selected));
     };
     input.addEventListener('change', updateFiles);
     return () => {
@@ -131,25 +134,13 @@ const LandingPage: React.FC = () => {
     };
   }, [screen]);
 
+  // Only merge files on selection — no uploads/overlay here
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0] || null;
-    if (!file) return;
-    try {
-      const quote_id = resolveQuoteId();
-      setOpen(true); setMessage("Uploading file…"); setPercent(5); setEta(undefined);
-      await uploadViaSignedUrl(quote_id, file);
-      setMessage("Saving file details…"); setPercent(12);
-      await saveQuoteFromUI(quote_id, file, null);
-      await runOcrAndGemini(quote_id, file.name, u => {
-        setMessage(u.message); setPercent(u.percent); setEta(u.etaSeconds);
-      });
-      setMessage("All set ✅"); setPercent(100); setEta(0);
-    } catch (err: any) {
-      console.error(err);
-      setMessage(err?.message || "Something went wrong"); setEta(undefined); setPercent(0);
-    } finally {
-      setTimeout(() => setOpen(false), 900);
-    }
+    const selected = Array.from(e.target.files ?? []);
+    if (selected.length === 0) return;
+    setFiles(prev => mergeSelectedFiles(prev, selected));
+    if (!AUTO_ANALYZE_ON_UPLOAD) return;
+    // (If you ever enable auto analysis again, reintroduce the pipeline here.)
   }
 
   useEffect(() => {
@@ -236,7 +227,8 @@ const LandingPage: React.FC = () => {
         target_language: targetLanguage,
       });
 
-      const assignedQuoteId = saveJson?.quote_id;
+      // Robust fallback if API doesn't echo quote_id
+      const assignedQuoteId = saveJson?.quote_id || quoteId || ensureQuoteId();
       if (!assignedQuoteId) throw new Error('Could not determine quote ID');
       setQuoteId(assignedQuoteId);
 
@@ -371,7 +363,21 @@ const LandingPage: React.FC = () => {
     });
 
     if (isGetQuoteDisabled) return;
-    await submitQuoteForm(formRef.current, id);
+
+    // Overlay now starts ONLY when button is clicked
+    setOpen(true);
+    setMessage("Preparing your quote…");
+    setPercent(10);
+    setEta(undefined);
+
+    try {
+      await submitQuoteForm(formRef.current, id);
+      setMessage("All set ✅");
+      setPercent(100);
+      setEta(0);
+    } finally {
+      setTimeout(() => setOpen(false), 900);
+    }
   };
 
   async function onQuoteFormSubmit(e: React.FormEvent<HTMLFormElement>) {
