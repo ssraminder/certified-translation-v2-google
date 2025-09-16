@@ -445,33 +445,40 @@ const LandingPage: React.FC = () => {
       );
 
       const res = await runVisionOcr({ quote_id: quoteId, files: filesPayload });
+// Normalize snake_case/camelCase variants and compute totals if missing
+const normalized = (Array.isArray(res?.results) ? res.results : []).map((r: any) => {
+  const wordsPerPageRaw =
+    r.wordsPerPage ?? r.words_per_page ?? r.word_counts_per_page ??
+    r.page_word_counts ?? r.wordsByPage ?? r.words_by_page ??
+    r.page_words ?? r.page_text_word_counts ?? r.pageWords ?? [];
 
-      // Normalize snake_case/camelCase variants and compute totals if missing
-      const normalized = (Array.isArray(res?.results) ? res.results : []).map((r: any) => {
-        const wordsPerPageRaw =
-          r.wordsPerPage ?? r.words_per_page ?? r.word_counts_per_page ??
-          r.page_word_counts ?? r.wordsByPage ?? r.words_by_page ??
-          r.page_words ?? r.page_text_word_counts ?? r.pageWords ?? [];
-        const wordsPerPage = Array.isArray(wordsPerPageRaw) ? wordsPerPageRaw : [];
-        const pageCount =
-          r.pageCount ?? r.page_count ?? r.pages ?? r.num_pages ??
-          (Array.isArray(wordsPerPage) ? wordsPerPage.length : 0);
-        const totalFromArray = Array.isArray(wordsPerPage)
-          ? wordsPerPage.reduce((s: number, n: any) => s + (Number(n) || 0), 0)
-          : 0;
-        const totalWordCount =
-          r.totalWordCount ?? r.total_words ?? r.word_count ?? r.total ?? totalFromArray;
+  const wordsPerPage: number[] = Array.isArray(wordsPerPageRaw)
+    ? wordsPerPageRaw.map((n: any) => Number(n) || 0)
+    : [];
 
-        return {
-          fileName: r.fileName ?? r.file_name ?? 'unknown',
-          pageCount: Number(pageCount) || 0,
-          wordsPerPage: Array.isArray(wordsPerPage) ? wordsPerPage.map((n:any)=>Number(n)||0) : [],
-          detectedLanguage: r.detectedLanguage ?? r.detected_language ?? r.language ?? r.lang ?? 'undetermined',
-          totalWordCount: Number(totalWordCount) || totalFromArray || 0,
-          ocrStatus: r.ocrStatus ?? r.status ?? '',
-          ocrMessage: r.ocrMessage ?? r.message ?? '',
-        };
-      });
+  const pageCountRaw =
+    r.pageCount ?? r.page_count ?? r.pages ?? r.num_pages ??
+    (Array.isArray(wordsPerPage) ? wordsPerPage.length : 0);
+  const pageCount = Number(pageCountRaw) || 0;
+
+  const totalFromArray = wordsPerPage.reduce((s: number, n: number) => s + (Number(n) || 0), 0);
+
+  const totalWordCountRaw =
+    r.totalWordCount ?? r.total_words ?? r.word_count ?? r.total ?? totalFromArray;
+  const totalWordCount = Number(totalWordCountRaw) || totalFromArray || 0;
+
+  return {
+    fileName: r.fileName ?? r.file_name ?? "unknown",
+    pageCount,
+    wordsPerPage,
+    detectedLanguage:
+      r.detectedLanguage ?? r.detected_language ?? r.language ?? r.lang ?? "undetermined",
+    totalWordCount,
+    ocrStatus: r.ocrStatus ?? r.status ?? "",
+    ocrMessage: r.ocrMessage ?? r.message ?? "",
+  };
+}) as VisionOcrResult[];
+
 
       setOcrPreview(normalized);
 
@@ -496,49 +503,77 @@ const LandingPage: React.FC = () => {
     }
   };
 
-  function normalizeGemRow(r: any) {
-    // Accept map, array-of-objects, or parallel arrays
-    // 1) Derive a page map for complexity
-    let pageMap: Record<string, any> = {};
-    const complexity = r.gem_page_complexity ?? r.page_complexity ?? r.per_page_complexity;
-    if (complexity && typeof complexity === 'object' && !Array.isArray(complexity)) {
-      pageMap = complexity;
-    } else if (Array.isArray(complexity)) {
-      pageMap = Object.fromEntries(
-        complexity.map((v: any, i: number) => [String((i + 1)), { complexity: v }])
-      );
-    } else if (Array.isArray(r.gem_pages)) {
-      pageMap = Object.fromEntries(
-        r.gem_pages.map((p: any) => [String(p.page ?? p.pageNumber ?? p.index ?? ''), p])
-      );
-    }
+ function normalizeGemRow(r: any) {
+  // 1) Build a page map from several possible shapes (map, array-of-objects, parallel arrays)
+  const complexityAny =
+    r.gem_page_complexity ?? r.page_complexity ?? r.per_page_complexity;
 
-    const docTypes = r.gem_page_doc_types ?? r.page_doc_types ?? {};
-    const namesMap = r.gem_page_names ?? r.page_names ?? {};
-    const langsMap = r.gem_page_languages ?? r.page_languages ?? {};
+  let pageMap: Record<string, any> = {};
+  if (complexityAny && typeof complexityAny === "object" && !Array.isArray(complexityAny)) {
+    // Already a map like { "1": { complexity: "medium" }, ... } or { "1": "medium", ... }
+    pageMap = complexityAny as Record<string, any>;
+  } else if (Array.isArray(complexityAny)) {
+    // Array of complexity values -> index-keyed map
+    pageMap = Object.fromEntries(
+      (complexityAny as any[]).map((v, i) => [String(i + 1), { complexity: v }])
+    );
+  } else if (Array.isArray(r.gem_pages)) {
+    // Array of page objects -> keyed by page/pageNumber/index
+    pageMap = Object.fromEntries(
+      r.gem_pages.map((p: any) => [String(p.page ?? p.pageNumber ?? p.index ?? ""), p])
+    );
+  }
 
-    // If any of these are arrays, zip by index into keyed objects
-    const coerceArrayToMap = (arr: any[]) =>
-      Object.fromEntries(arr.map((v, i) => [String(i + 1), v]));
-    const docTypesMap = Array.isArray(docTypes) ? coerceArrayToMap(docTypes) : docTypes;
-    const namesK = Array.isArray(namesMap) ? coerceArrayToMap(namesMap) : namesMap;
-    const langsK = Array.isArray(langsMap) ? coerceArrayToMap(langsMap) : langsMap;
+  // 2) Per-page auxiliary maps (doc types, names, languages), accepting either maps or arrays
+  const coerceArrayToMap = (arr: any[]) =>
+    Object.fromEntries(arr.map((v, i) => [String(i + 1), v]));
 
-    const pages = Object.keys(pageMap).filter(k => k);
-    const per_page = pages.map((k) => {
-      const v = pageMap[k];
-      const complexityVal = typeof v === 'string' ? v : (v?.complexity ?? v?.score ?? '');
-      const docType = docTypesMap?.[k] ?? v?.docType ?? v?.doc_type ?? '';
-      const names = Array.isArray(namesK?.[k]) ? namesK[k] : (v?.names ?? []);
-      const languages = Array.isArray(langsK?.[k]) ? langsK[k] : (v?.languages ?? []);
-      return { page: k, complexity: complexityVal, docType, names, languages };
-    });
+  const docTypesAny = r.gem_page_doc_types ?? r.page_doc_types ?? {};
+  const namesAny = r.gem_page_names ?? r.page_names ?? {};
+  const langsAny = r.gem_page_languages ?? r.page_languages ?? {};
 
-    return {
-      file_name: r.file_name ?? r.fileName ?? 'unknown',
-      gem_status: r.gem_status ?? r.status ?? '',
-      gem_message: r.gem_message ?? r.message ?? '',
-      gem_languages_all: r.gem_languages_all ?? r.languages_all ?? r.languages ?? [],
+  const docTypesMap = Array.isArray(docTypesAny) ? coerceArrayToMap(docTypesAny) : docTypesAny;
+  const namesMap = Array.isArray(namesAny) ? coerceArrayToMap(namesAny) : namesAny;
+  const langsMap = Array.isArray(langsAny) ? coerceArrayToMap(langsAny) : langsAny;
+
+  // 3) Pages = union of keys from all sources to avoid dropping info when one map is empty
+  const keyUnion = new Set<string>([
+    ...Object.keys(pageMap || {}),
+    ...Object.keys(docTypesMap || {}),
+    ...Object.keys(namesMap || {}),
+    ...Object.keys(langsMap || {}),
+  ].filter(Boolean));
+
+  const ensureArray = (x: any) =>
+    Array.isArray(x) ? x : (x == null ? [] : [x]);
+
+  const per_page = Array.from(keyUnion).map((k) => {
+    const v = (pageMap && pageMap[k]) || {};
+    const complexityVal =
+      (typeof v === "string" ? v : (v?.complexity ?? v?.score)) ??
+      (typeof complexityAny === "object" && !Array.isArray(complexityAny) ? complexityAny?.[k] : "") ??
+      "";
+
+    const docType = (docTypesMap && docTypesMap[k]) ?? v?.docType ?? v?.doc_type ?? "";
+    const names = Array.isArray(namesMap?.[k]) ? namesMap[k] : ensureArray(v?.names);
+    const languages = Array.isArray(langsMap?.[k]) ? langsMap[k] : ensureArray(v?.languages);
+
+    return { page: k, complexity: complexityVal, docType, names, languages };
+  });
+
+  // 4) Doc-level fields with broad fallbacks
+  const langsAllAny = r.gem_languages_all ?? r.languages_all ?? r.languages ?? [];
+  const gem_languages_all = Array.isArray(langsAllAny) ? langsAllAny : ensureArray(langsAllAny);
+
+  return {
+    file_name: r.file_name ?? r.fileName ?? "unknown",
+    gem_status: r.gem_status ?? r.status ?? "",
+    gem_message: r.gem_message ?? r.message ?? "",
+    gem_languages_all,
+    per_page,
+  };
+}
+
       per_page,
     };
   }
@@ -553,10 +588,22 @@ const LandingPage: React.FC = () => {
         const normalized = (rows || []).map(normalizeGemRow);
         setGemResults(normalized);
 
-        const done = normalized.every((r: any) => {
-          const s = String(r.gem_status || '').toLowerCase();
-          return s === 'success' || s === 'error' || s === 'done' || s === 'completed';
-        });
+// Consider a row "done" if it has a terminal status or an explicit done flag
+const terminalStatuses = new Set(["success", "error", "done", "completed"]);
+
+const done = normalized.every((r: any) => {
+  // honor explicit boolean flags if present
+  const boolish =
+    r.isDone ?? r.done ?? r.completed ?? r.complete ?? r.finished;
+  if (typeof boolish === "boolean") return boolish;
+
+  // otherwise, fall back to string status (with broad key aliasing)
+  const s = String(r.gem_status ?? r.status ?? "")
+    .trim()
+    .toLowerCase();
+  return terminalStatuses.has(s);
+});
+
         if (done || tries >= max) {
           clearInterval(iv);
           setGemLoading(false);
