@@ -5,6 +5,7 @@ import { runOcr, OcrResult as MockOcrResult } from './integrations/googleVision'
 import { analyzeWithGemini, GeminiAnalysis } from './integrations/gemini';
 import supabase from './src/lib/supabaseClient';
 import { saveQuote, sendQuote, runVisionOcr, runGeminiAnalyze, fetchQuoteFiles } from 'api';
+import { resolveQuoteId, saveQuoteDetails } from '@/lib/quoteForm';
 import type { OcrResult as VisionOcrResult } from './types';
 
 type Screen = 'form' | 'waiting' | 'review' | 'result' | 'error';
@@ -259,6 +260,22 @@ const LandingPage: React.FC = () => {
     }
   }
 
+  async function onQuoteFormSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const quote_id = resolveQuoteId();
+
+    const fd = new FormData(e.currentTarget);
+    const name            = String(fd.get("name") || "");
+    const email           = String(fd.get("email") || "");
+    const phone           = String(fd.get("phone") || "");
+    const intended_use    = String(fd.get("intended_use") || "");
+    const source_language = String(fd.get("source_language") || "");
+    const target_language = String(fd.get("target_language") || "");
+
+    await saveQuoteDetails({ quote_id, name, email, phone, intended_use, source_language, target_language });
+    await handleSubmit(e);
+  }
+
   // DO NOT EDIT OUTSIDE THIS BLOCK
   const fileSummaries = results.map(file => ({
     fileName: file.fileName,
@@ -424,7 +441,7 @@ const LandingPage: React.FC = () => {
           <section className="card max-w-2xl mx-auto" data-ui="quote-form">
             <h1 className="h1">Request a Certified Translation Quote</h1>
             <p className="subtle">Fast. Accurate. IRCC & Alberta Government accepted.</p>
-            <form onSubmit={handleSubmit} aria-busy={loadingDropdowns ? 'true' : undefined}>
+            <form onSubmit={onQuoteFormSubmit} aria-busy={loadingDropdowns ? 'true' : undefined}>
               {Object.keys(errors).length > 0 && (
                 <div className="bg-red-100 text-red-700 p-2 rounded" role="alert">
                   Please correct the highlighted fields.
@@ -438,33 +455,33 @@ const LandingPage: React.FC = () => {
               <div className="form-grid">
                 <div className="field full">
                   <label className="label" htmlFor="customerName">Name*</label>
-                  <input id="customerName" type="text" value={customerName} onChange={e=>setCustomerName(e.target.value)} aria-invalid={errors.customerName ? 'true' : undefined} className="input" />
+                  <input id="customerName" name="name" type="text" value={customerName} onChange={e=>setCustomerName(e.target.value)} aria-invalid={errors.customerName ? 'true' : undefined} className="input" />
                 </div>
                 <div className="field full">
                   <label className="label" htmlFor="customerEmail">Email*</label>
-                  <input id="customerEmail" type="email" value={customerEmail} onChange={e=>setCustomerEmail(e.target.value)} aria-invalid={errors.customerEmail ? 'true' : undefined} className="input" />
+                  <input id="customerEmail" name="email" type="email" value={customerEmail} onChange={e=>setCustomerEmail(e.target.value)} aria-invalid={errors.customerEmail ? 'true' : undefined} className="input" />
                 </div>
                 <div className="field full">
                   <label className="label" htmlFor="customerPhone">Phone</label>
-                  <input id="customerPhone" type="tel" value={customerPhone} onChange={e=>setCustomerPhone(e.target.value)} className="input" />
+                  <input id="customerPhone" name="phone" type="tel" value={customerPhone} onChange={e=>setCustomerPhone(e.target.value)} className="input" />
                 </div>
                 <div className="field full">
                   <label className="label" htmlFor="intendedUse">Intended Use*</label>
-                  <select id="intendedUse" value={intendedUse} onChange={e=>setIntendedUse(e.target.value)} aria-invalid={errors.intendedUse ? 'true' : undefined} className="select" disabled={loadingDropdowns}>
+                  <select id="intendedUse" name="intended_use" value={intendedUse} onChange={e=>setIntendedUse(e.target.value)} aria-invalid={errors.intendedUse ? 'true' : undefined} className="select" disabled={loadingDropdowns}>
                     <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
                     {intendedUses.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                   </select>
                 </div>
                 <div className="field">
                   <label className="label" htmlFor="sourceLanguage">Source Language*</label>
-                  <select id="sourceLanguage" value={sourceLanguage} onChange={e=>setSourceLanguage(e.target.value)} aria-invalid={errors.sourceLanguage ? 'true' : undefined} className="select" disabled={loadingDropdowns}>
+                  <select id="sourceLanguage" name="source_language" value={sourceLanguage} onChange={e=>setSourceLanguage(e.target.value)} aria-invalid={errors.sourceLanguage ? 'true' : undefined} className="select" disabled={loadingDropdowns}>
                     <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
                     {languages.map(l => <option key={l} value={l}>{l}</option>)}
                   </select>
                 </div>
                 <div className="field">
                   <label className="label" htmlFor="targetLanguage">Target Language*</label>
-                  <select id="targetLanguage" value={targetLanguage} onChange={e=>setTargetLanguage(e.target.value)} aria-invalid={errors.targetLanguage ? 'true' : undefined} className="select" disabled={loadingDropdowns}>
+                  <select id="targetLanguage" name="target_language" value={targetLanguage} onChange={e=>setTargetLanguage(e.target.value)} aria-invalid={errors.targetLanguage ? 'true' : undefined} className="select" disabled={loadingDropdowns}>
                     <option value="">{loadingDropdowns ? 'Loading…' : 'Select...'}</option>
                     {languages.map(l => <option key={l} value={l}>{l}</option>)}
                   </select>
