@@ -105,3 +105,20 @@ export const handler: Handler = async (event) => {
           .update(payload)
           .eq("quote_id", b.quote_id)
           .eq("file_name", b.file_name ?? "");
+        if (error) throw new Error(`update quote_files: ${error.message}`);
+      }
+    }
+
+    return {
+      statusCode: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ok: true })
+    };
+  } catch (err: any) {
+    return {
+      statusCode: 500,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ok: false, error: err?.message || String(err) })
+    };
+  }
+};
