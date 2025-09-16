@@ -5,7 +5,11 @@ import { runOcr, OcrResult as MockOcrResult } from './integrations/googleVision'
 import { analyzeWithGemini, GeminiAnalysis } from './integrations/gemini';
 import supabase from './src/lib/supabaseClient';
 import { saveQuote, sendQuote, runVisionOcr, runGeminiAnalyze, fetchQuoteFiles } from 'api';
-import { resolveQuoteId, saveQuoteDetails } from '@/lib/quoteForm';
+import { saveQuoteDetails } from "./src/lib/quoteForm";
+import AnalysisOverlay from "./src/components/AnalysisOverlay";
+import { runOcrAndGemini } from "./src/lib/analysisPipeline";
+import { uploadViaSignedUrl, saveQuoteFromUI } from "./src/lib/quoteApi";
+import { resolveQuoteId } from "./src/lib/quoteForm";
 import type { OcrResult as VisionOcrResult } from './types';
 
 type Screen = 'form' | 'waiting' | 'review' | 'result' | 'error';
@@ -85,6 +89,51 @@ const LandingPage: React.FC = () => {
   const [gemResults, setGemResults] = useState<any[]>([]);
   const [gemLoading, setGemLoading] = useState(false);
   const [gemError, setGemError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [message, setMessage] = useState("");
+  const [percent, setPercent] = useState(0);
+  const [eta, setEta] = useState<number | undefined>(undefined);
+
+  useEffect(() => {
+    const input = fileInputRef.current;
+    if (!input) return;
+    const updateFiles = (event: Event) => {
+      const target = event.target as HTMLInputElement | null;
+      const list = target?.files ?? input.files;
+      const selected = Array.from(list ?? []);
+      if (selected.length === 0) return;
+      setFiles(prev => {
+        const byKey = new Map(prev.map(f => [f.name + ':' + f.size, f]));
+        for (const f of selected) byKey.set(f.name + ':' + f.size, f);
+        return Array.from(byKey.values());
+      });
+    };
+    input.addEventListener('change', updateFiles);
+    return () => {
+      input.removeEventListener('change', updateFiles);
+    };
+  }, [screen]);
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] || null;
+    if (!file) return;
+    try {
+      const quote_id = resolveQuoteId();
+      setOpen(true); setMessage("Uploading file…"); setPercent(5); setEta(undefined);
+      await uploadViaSignedUrl(quote_id, file);
+      setMessage("Saving file details…"); setPercent(12);
+      await saveQuoteFromUI(quote_id, file, null);
+      await runOcrAndGemini(quote_id, file.name, u => {
+        setMessage(u.message); setPercent(u.percent); setEta(u.etaSeconds);
+      });
+      setMessage("All set ✅"); setPercent(100); setEta(0);
+    } catch (err: any) {
+      console.error(err);
+      setMessage(err?.message || "Something went wrong"); setEta(undefined); setPercent(0);
+    } finally {
+      setTimeout(() => setOpen(false), 900);
+    }
+  }
 
   useEffect(() => {
   let mounted = true;
@@ -415,6 +464,7 @@ const LandingPage: React.FC = () => {
 
   return (
     <div className="min-h-screen flex flex-col">
+      <AnalysisOverlay open={open} message={message} percent={percent} etaSeconds={eta} />
       {/* Header */}
       <header className="sticky top-0 bg-white dark:bg-[#0C1E40] shadow flex items-center justify-between px-4 py-2" role="navigation" aria-label="main">
         <a href="/" className="flex items-center">
@@ -494,13 +544,7 @@ const LandingPage: React.FC = () => {
                       type="file"
                       multiple
                       accept=".pdf,image/*,.docx,.xlsx" // allow images, pdf, docx, xlsx
-                      onChange={(e) => {
-                        const selected = Array.from(e.target.files || []);
-                        // de-dupe by name+size
-                        const byKey = new Map(files.map(f => [f.name + ':' + f.size, f]));
-                        for (const f of selected) byKey.set(f.name + ':' + f.size, f);
-                        setFiles(Array.from(byKey.values()));
-                      }}
+                      onChange={handleFileChange}
                       aria-invalid={errors.files ? 'true' : undefined}
                     />
                     <div className="title">Drag & drop files here</div>
