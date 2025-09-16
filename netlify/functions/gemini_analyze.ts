@@ -1,5 +1,5 @@
 import type { Handler } from "@netlify/functions";
-import { GoogleGenerativeAI } from "@google/generative-ai/server";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Storage } from "@google-cloud/storage";
 import { getStorage } from "./_shared/gcpCreds";
 import { createClient } from "@supabase/supabase-js";
@@ -31,9 +31,9 @@ async function loadOcrText(prefix: string, cap = 50000) {
   return all.trim();
 }
 
-function coerceJson(text: string) {
-  const fence = text.match(/```json\s*([\s\S]*?)```/i)?.[1];
-  const body = fence || text;
+function extractJson(text: string) {
+  const fenced = text.match(/```json\s*([\s\S]*?)```/i)?.[1];
+  const body = fenced || text;
   const obj = body.match(/\{[\s\S]*\}/);
   return obj ? obj[0] : body;
 }
@@ -52,15 +52,8 @@ export const handler: Handler = async (event) => {
     const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-pro" });
 
-    const prompt = `You are an assistant that outputs STRICT JSON ONLY (no prose).
-Return:
-{
-  "doc_type": one of ${JSON.stringify(DOC_TYPES)},
-  "primary_language": string (IETF/ISO code),
-  "secondary_languages": string[],
-  "names": string[] (max 5),
-  "confidence": number between 0 and 1
-}
+    const prompt = `Return STRICT JSON with:
+{ "doc_type": one of ${JSON.stringify(DOC_TYPES)}, "primary_language": string, "secondary_languages": string[], "names": string[], "confidence": number }
 Document text:
 -----
 ${text}
@@ -69,7 +62,7 @@ ${text}
     const res = await model.generateContent([{ text: prompt }]);
     const raw = res.response.text().trim();
     let parsed: any;
-    try { parsed = JSON.parse(coerceJson(raw)); }
+    try { parsed = JSON.parse(extractJson(raw)); }
     catch { return { statusCode: 502, body: `Bad JSON from model: ${raw}` }; }
 
     const supa = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
@@ -86,8 +79,8 @@ ${text}
       .update(update).eq("quote_id", quote_id).eq("file_name", file_name);
     if (error) return { statusCode: 500, body: `DB error: ${error.message}` };
 
-    return { statusCode: 200, body: JSON.stringify({ ok: true, update }) };
+    return { statusCode: 200, body: JSON.stringify({ ok:true, update }) };
   } catch (e: any) {
-    return { statusCode: 500, body: JSON.stringify({ ok: false, error: e?.message || String(e) }) };
+    return { statusCode: 500, body: JSON.stringify({ ok:false, error: e?.message || String(e) }) };
   }
 };
